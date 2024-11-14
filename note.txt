@@ -1,0 +1,17 @@
+Overall process: 
+1. Run the analysis pass, produce an analysis result with information on each struct. 
+    - For each struct, we need to first find L overall hottest loops (by the total BB execution count)
+    - Then inside of each of the L loops, go through all BBs, record BB execution count before entering, then go through all instructions in the BB, look for %m = GEP ptr %p. 
+    - Find the %p's struct type, and determine which member index this is. 
+    - Now get all uses of %m, and check execution count of them. 
+    - Accumulate these uses of the member-structtype mapping 
+    - Output result to a json file  
+2. Then call Python script to read this json file, Python script will then create another json file with grouping results. 
+3. Then call transformation pass to read the result json file, transform the code 
+4. Run python timing script, produce runtime 
+5. Fuse the runtime with the grouping result json to produce a final json. 
+
+
+Direct struct array access: 
+%240 = getelementptr inbounds %struct.UserData, ptr %28, i64 %239
+  %14 = getelementptr inbounds %struct.Element, ptr %11, i64 %13 

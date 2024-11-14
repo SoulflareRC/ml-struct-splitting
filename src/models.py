@@ -1,0 +1,251 @@
+import torch 
+import torch.nn as nn 
+import torch.optim as optim
+from tqdm import tqdm  
+import pandas as pd 
+'''
+The core machine learning pipeline. 
+
+For a struct, if it has F fields, and suppose we take L hottest loops, there will be C groupings, 
+Each struct will produce a F x L matrix, and F x 1 groupings, 
+we have F x (L+1) after concat grouping vector to the feature vector, now the feature matrix takes both the grouping information and the feature vectors 
+Then we generate this for all groupers, so we can get a 
+C x F x (L+1) matrix 
+we use this to predict a C x 1 one-hot encoding, indicating which grouping will be the best. 
+
+We will use an encoder to encoder each F x (L+1) matrix into (hidden, ) as encoding from each group should not interfere
+Then we concatenate them horizontally into (C * hidden, ) encoding 
+Finally we pass this into a linear layer for classification, converting (B, C*hidden) into (B, C) 
+''' 
+HOTNESS_LOOP_CNT = 10 # consider 10 hottest loops 
+DEFAULT_HIDDEN_SIZE = 64 
+LOG_EPOCH_INTERVAL = 10 
+DEFAULT_MODEL_PATH = "model.pth" 
+
+# Define a model to process each matrix of size F x (L+1)
+class MatrixEncoder(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(MatrixEncoder, self).__init__()
+        # You can use LSTM, GRU, or even Transformer layers
+        self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size, num_layers=1, batch_first=True)
+        # (B, seqlen, input) --> 
+        # output: (B, seqlen, input) 
+        # hidden: (num layers, B, hidden)
+        self.fc = nn.Linear(hidden_size, hidden_size)  # Final encoding layer
+        # will be (*, input) --> (*, hidden)
+
+    def forward(self, x):
+        # print("Encoder input: ", x.shape) 
+        # x shape will be (B, C, F, L+1), need to reshape to (B*C, F, L+1) for separate processing 
+        x = x.view(-1, x.shape[2], x.shape[3]) 
+        # print("Reshaped x: ", x.shape) 
+        
+        # x: (batch_size, F, L+1), batch of matrices
+        _, h_n = self.rnn(x)  # h_n will be of shape (1, batch_size, hidden_size)
+        return self.fc(h_n.squeeze(0))  # Output a fixed-size encoding
+        # output size: [B, hidden] 
+   
+   # Define a model that combines the C matrix encodings and predicts the best matrix
+class BestMatrixSelector(nn.Module):
+    def __init__(self, input_size, hidden_size, C):
+        super(BestMatrixSelector, self).__init__()
+        self.encoder = MatrixEncoder(input_size, hidden_size)  # To encode each matrix
+        self.fc = nn.Linear(C * hidden_size, C)  # Classifier to select the best matrix
+
+    def forward(self, matrices):
+        # print("matrices: ", matrices.shape)
+        B = matrices.shape[0]  
+        # matrices: List of C matrices of shape (F, L+1)
+        # encoded_matrices = [self.encoder(matrix) for matrix in matrices]
+        encoded = self.encoder(matrices) 
+        # print("encoded result: ", encoded.shape) 
+        # result will be (B*C, hidden) 
+        # this needs to be reshaped into (B, C*hidden) 
+        encoded = encoded.view(B, -1) 
+        # print("Reshaped encoded result: ", encoded.shape) 
+        
+        # Concatenate the encoded matrices into a single vector of size C * hidden_size
+        # combined_encoding = torch.cat(encoded_matrices, dim=-1)
+        # print("combined encoding: ", combined_encoding.shape)
+        # Pass through the final layer to predict the best matrix
+        return self.fc(encoded)
+
+class GroupingSelector: 
+    def __init__(self, C, L = HOTNESS_LOOP_CNT, hidden_size = DEFAULT_HIDDEN_SIZE):
+        ''' 
+        C: number of grouping methods 
+        L: L hottest loops 
+        ''' 
+        self.input_size = L+1 
+        self.model = BestMatrixSelector(input_size=self.input_size, hidden_size=hidden_size, C=C) 
+    def train(self, ds_df:pd.DataFrame, epochs = 100): 
+        print("Training Matrix Selector model!!!") 
+        criterion = nn.CrossEntropyLoss() 
+        optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
+        for epoch in tqdm(range(epochs)): 
+            for idx, row in ds_df.iterrows():  
+                feature_grouping_matrices = row["feature_grouping_matrices"] 
+                target = row["target"] 
+                # print(idx, type(time_deltas), type(feature_grouping_matrices), type(target)) 
+                feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32)  
+                target = torch.tensor(target).long()  
+                # print(target) 
+                # print(feature_grouping_matrices) 
+                
+                # unsqueeze out the batch dimension 
+                target = target.unsqueeze(0) 
+                feature_grouping_matrices = feature_grouping_matrices.unsqueeze(0) 
+                # print(target.shape, feature_grouping_matrices.shape) 
+
+                output = self.model(feature_grouping_matrices) 
+                
+                loss = criterion(output, target) 
+                
+                optimizer.zero_grad() 
+                loss.backward() 
+                optimizer.step() 
+                
+                if (epoch+1) % LOG_EPOCH_INTERVAL == 0: 
+                    print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item()}")
+    
+    def test(self, ds_df: pd.DataFrame): 
+        with torch.no_grad(): 
+            total_test_cnt = 0 
+            total_correct_cnt = 0 
+            for idx, row in ds_df.iterrows(): 
+                target = row["target"] 
+                feature_grouping_matrices = row["feature_grouping_matrices"] 
+                target = torch.tensor(target).long().unsqueeze(0) 
+                feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32).unsqueeze(0)
+                output = self.model(feature_grouping_matrices) 
+                prediction = torch.argmax(output, dim=1) 
+                print(f"target: {target} prediction: {prediction}")
+                test_cnt = prediction.numel()
+                correct_cnt = (prediction == target).sum() 
+                print(f"test cnt: {test_cnt} correct cnt: {correct_cnt}" )
+                total_test_cnt += test_cnt 
+                total_correct_cnt += correct_cnt 
+            total_correct_rate = total_correct_cnt / total_test_cnt 
+            print(f"total test cnt: {total_test_cnt} total correct cnt: {total_correct_cnt} total correct rate {total_correct_rate}")
+    
+    def predict(self, feature_grouping_matrices):
+        feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32).unsqueeze(0)
+        output = self.model(feature_grouping_matrices) 
+        prediction = torch.argmax(output, dim=1).squeeze() 
+        return prediction 
+    
+    def save_model(self, fname=DEFAULT_MODEL_PATH): 
+        print(f"Saving model to path: {fname}") 
+        torch.save(self.model.state_dict(), fname) 
+    
+    def load_model(self, fname=DEFAULT_MODEL_PATH):
+        print(f"Loading model from path: {fname}") 
+        self.model.load_state_dict(torch.load(fname, weights_only=True)) 
+    
+def test_inference(): 
+    # Define parameters
+    F = 5  # Number of features
+    L = 3  # Number of loops
+    C = 4  # Number of groupings (matrices)
+    hidden_size = 10  # Hidden size for the encoder
+    batch_size = 2  # Batch size (for testing with multiple batches)
+
+    # Initialize the model
+    input_size = L + 1  # Feature matrix has L+1 columns (features + grouping)
+    model = BestMatrixSelector(input_size=input_size, hidden_size=hidden_size, C=C)
+
+    # Create random input matrices (batch of C matrices per struct)
+    random_matrices = []
+    for _ in range(C):
+        # Each matrix is of shape (batch_size, F, L+1)
+        matrix = torch.randn(batch_size, F, L + 1)  # Random data simulating feature matrices
+        random_matrices.append(matrix)
+
+    # Forward pass through the model
+    output = model(random_matrices)
+
+    # Print the output to verify results
+    print("Output predictions (one-hot encoding):", output)
+    print("Shape of output:", output.shape)  # Should be (batch_size, C)
+
+def test_training(): 
+     # Define parameters
+    F = 5  # Number of features
+    L = 3  # Number of loops
+    C = 4  # Number of groupings (matrices)
+    hidden_size = 10  # Hidden size for the encoder
+    batch_size = 2  # Batch size
+    epochs = 1000  # Number of training epochs
+    print(f"F: {F}, L: {L}, C: {C}")
+
+    # Initialize the model
+    input_size = L + 1  # Feature matrix has L+1 columns (features + grouping)
+    model = BestMatrixSelector(input_size=input_size, hidden_size=hidden_size, C=C)
+    encoder = MatrixEncoder(input_size=input_size, hidden_size=hidden_size) 
+    
+
+    # Loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+    for epoch in tqdm(range(epochs)):
+        # Create random input matrices (batch of C matrices per struct)
+
+        matrices = torch.randn(batch_size, C, F, L+1) 
+        print("matrices shape: ", matrices.shape) 
+        sums = torch.sum(matrices, dim=(2, 3)) 
+        print("sums shape: ", sums.shape) 
+        print("sums: ", sums)  
+        targets = torch.argmax(sums, dim=1) 
+        print("targets: ", targets)
+        
+        
+        encoded = encoder(matrices) 
+        print("encoded: ", encoded.shape) 
+
+        # Forward pass through the model
+        outputs = model(matrices)  # (batch_size, C)
+        print("outputs shape: ", outputs.shape)
+        print("outputs: ", outputs) 
+        
+        predictions = torch.argmax(outputs, dim=1) 
+        print("predictions: ", predictions) 
+
+        # Compute the loss
+        loss = criterion(outputs, targets)
+        print("loss: ", loss.item()) 
+
+        # Backpropagation and optimization
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # Print loss every 10 epochs
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item()}")
+
+    # Testing the trained model
+    print("Training finished. Testing on random data...")
+    with torch.no_grad(): 
+        total_correct_cnt = 0; 
+        total_test_cnt = 0 
+        for i in range(10): 
+            matrices = torch.randn(batch_size, C, F, L+1) 
+            print("matrices shape: ", matrices.shape) 
+            sums = torch.sum(matrices, dim=(2, 3)) 
+            print("sums shape: ", sums.shape) 
+            print("sums: ", sums)  
+            targets = torch.argmax(sums, dim=1) 
+            print("targets: ", targets)
+            outputs = model(matrices) 
+            predictions = torch.argmax(outputs, dim=1)  # Get the predicted matrix index
+            print("Predicted best matrices:", predictions)
+            correct = (targets == predictions)
+            print(f"Test count: {correct.numel()} Correct count: {correct.sum()}") 
+            total_correct_cnt += correct.sum() 
+            total_test_cnt += int(correct.numel()) 
+        total_correct_rate = (total_correct_cnt / total_test_cnt) * 100  
+        print(f"Total test count: {total_test_cnt} Total correct count: {total_correct_cnt} Total correct rate: {total_correct_rate}%")
+            
+if __name__ == "__main__":
+    test_training() 
