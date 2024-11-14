@@ -36,7 +36,6 @@
 
 #include <iostream> 
 #include <fstream> 
-#include "Profiler.h" 
 #include "json.hpp" 
 #include "Analyzer.hpp" 
 /* *******Implementation Ends Here******* */

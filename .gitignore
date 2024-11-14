@@ -9,7 +9,6 @@ __pycache__/
 **/tmp 
 **/build
 **/dump 
-**/
 *.so
 **/*run.log 
 **/*.profraw 
@@ -21,7 +20,6 @@ venv/
 
 # CMake build directory
 build/
-Makefile
 
 # VSCode
 .vscode/
