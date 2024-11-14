@@ -21,6 +21,7 @@ ANALYSIS_RESULT_FNAME="analysis_result.json"
 STRUCT_CSV_FNAME = "_grouping_result.csv"
 STRUCT_DATASET_CSV_FNAME = "_dataset_grouping_result.csv"
 TIME_EXECUTABLE_CNT=10
+DEFAULT_TIME_EXECUTABLE_CNT=10 
 MAX_N = 3 
 DEFAULT_MAX_N = 2 
 columns = ['struct_name', 'grouping_idx', 'feature_matrix', 'grouping_vector', 'time_delta', "d1_miss_delta", "lld_miss_delta", "score"]
@@ -480,14 +481,17 @@ def main():
     parser.add_argument("--noopt-fname", type=str, help="Unoptimized executable") 
     parser.add_argument("--source-file", type=str, help="The C source file without extension", default="programs/test_programs/test.c") 
     parser.add_argument("--benchmark-dir", type=str, help="Directory for benchmark folder", default="test_programs")  
+    parser.add_argument("--profile-avg-cnt", type=int, help="Number of iterations to run when profiling runtime and cache misses", default=DEFAULT_TIME_EXECUTABLE_CNT)  
     parser.add_argument("--model-path", type=str, help="Path to the saved model pth file", default=models.DEFAULT_MODEL_PATH)  
     args = parser.parse_args() 
-    
+     
     #  make use of args 
     source_file = args.source_file 
     source_file = Path(source_file) 
     print_pass_output = args.print_pass_output 
-    benchmark_dir = Path(args.benchmark_dir) 
+    benchmark_dir = Path(args.benchmark_dir)
+    profile_avg_cnt = int(args.profile_avg_cnt)  
+    TIME_EXECUTABLE_CNT = profile_avg_cnt 
     model_path = Path(args.model_path) 
     print("Benchmark directory: ", benchmark_dir)
     max_N = int(args.max_N)  
