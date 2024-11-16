@@ -9,6 +9,12 @@ build:
 # Variable to control output redirection
 REDIRECT_OUTPUT ?= yes
 
+setup_venv: 
+	python3 -m venv venv
+	. venv/bin/activate && pip install --upgrade pip setuptools wheel
+	. venv/bin/activate && pip install -r requirements.txt
+	
+
 train_predict_all: # train model and predict using programs under benchmark folder 
 	python3 src/analyze.py --analyze-and-transform-all --max-N=2 --profile-avg-cnt=10 --train-epochs=1000 --benchmark-dir=programs/test_programs --build-dir=build 
 
