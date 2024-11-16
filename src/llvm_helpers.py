@@ -9,8 +9,9 @@ from pathlib import Path
 import json 
 import logging 
 # ACTION NEEDED: Update the paths if necessary
-BUILD_DIR = "/mnt/o/Jul28Backup/UofM-Programs/eecs583/better-struct-opt/build"
-PATH2LIB = BUILD_DIR+"/structpass/StructPass.so"  # Specify your build directory in the project
+# BUILD_DIR = "/mnt/o/Jul28Backup/UofM-Programs/eecs583/ml-struct-splitting/build"
+# PATH2LIB = BUILD_DIR+"/structpass/StructPass.so"  # Specify your build directory in the project
+PATH2LIB="/structpass/StructPass.so"
 ANALYSIS_PASS = "struct-analysis"
 TRANSFORM_PASS = "struct-splitting"
 OUTPUT_OPT = "output_opt.txt" 
@@ -111,14 +112,14 @@ def run_command(command, capture_output=False):
         raise  # This will re-raise the exception to stop the program
     
 class LLVMHelper: 
-    def __init__(self, source_file:Path):  
+    def __init__(self, source_file:Path, build_dir:Path):   
         source_file = Path(source_file).absolute() 
         current_dir = Path.cwd().absolute()   
         self.source_file = source_file
         self.base_dir = source_file.parent
         self.base_name = str(self.base_dir) + "/" + self.source_file.stem 
         logging.debug(f"current_dir: {current_dir} source_file: {source_file} base_dir: {self.base_dir} base name: {self.base_name}")
-        
+        self.build_dir = str(build_dir) 
     def cleanup_files(self):
         print("Cleaning up files") 
         # Delete outputs from previous runs
@@ -176,7 +177,7 @@ class LLVMHelper:
         # Redirect output to /dev/null (Unix) or nul (Windows) if suppress_output is True
         output_redirection = " > /dev/null 2>&1" if suppress_output else " > analysis.out"
         
-        run_command(f"opt -load-pass-plugin='{PATH2LIB}' -passes='{ANALYSIS_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
+        run_command(f"opt -load-pass-plugin='{self.build_dir+PATH2LIB}' -passes='{ANALYSIS_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
 
     def run_transform_pass(self, suppress_output=False): 
         # Run transform pass
@@ -186,7 +187,7 @@ class LLVMHelper:
         # Redirect output to /dev/null (Unix) or nul (Windows) if suppress_output is True
         output_redirection = " > /dev/null 2>&1" if suppress_output else " > opt.out"
         
-        run_command(f"opt -load-pass-plugin='{PATH2LIB}' -passes='{TRANSFORM_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
+        run_command(f"opt -load-pass-plugin='{self.build_dir+PATH2LIB}' -passes='{TRANSFORM_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
 
     def generate_cachegrind_report(self, executable): 
         logging.debug(f"Generating cachegrind report for executable: {executable}")
