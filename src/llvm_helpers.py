@@ -188,6 +188,8 @@ class LLVMHelper:
         output_redirection = " > /dev/null 2>&1" if suppress_output else " > opt.out"
         
         run_command(f"opt -load-pass-plugin='{self.build_dir+PATH2LIB}' -passes='{TRANSFORM_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
+        
+        run_command(f"llvm-dis {self.base_dir}/*.bc")
 
     def generate_cachegrind_report(self, executable): 
         logging.debug(f"Generating cachegrind report for executable: {executable}")

@@ -149,6 +149,7 @@ class StructAnalyzer:
         with open(GROUPING_FNAME, "w") as f: 
             logging.debug(f"saving grouping dict to {GROUPING_FNAME}, grouping dict: \n", json.dumps(grouping_dict, indent=4))
             json.dump(grouping_dict, f, indent=4)
+        return grouping_dict 
     
     def generate_grouping(self, matrix:np.array , grouper_idx:int):
         grouper = self.grouper_arr[grouper_idx]  
@@ -367,14 +368,18 @@ class StructAnalyzer:
             lld_miss_delta = row["lld_miss_delta"] 
             score = row["score"] 
             print(f"struct: {struct_name} \t grouping_idx: {grouping_idx} \t score: {score}\t time_delta: {time_delta}\t d1_miss_delta: {d1_miss_delta}\t lld_miss_delta: {lld_miss_delta}\t") 
+            
     def run_grouping(self, grouping_idx:int): 
         '''
         will run the grouping_idx grouping method on all structs of the source code 
         '''
         self.run_setup() 
         self.load_analysis_file() 
-        self.calculate_grouping_with_idx(grouping_idx) 
+        analysis_dict = {k: v.tolist() for k, v in self.analysis_dict.items()}
+        grouping_dict = self.calculate_grouping_with_idx(grouping_idx) 
         score, avg_time_delta,avg_d1_miss_delta, avg_lld_miss_delta = self.run_transform() 
+        print(f"analysis dict: \n", json.dumps(analysis_dict, indent=4)) 
+        print(f"grouping dict: \n", json.dumps(grouping_dict, indent=4))  
         print(f"grouping: {grouping_idx} score: {score}, avg_time_delta: {avg_time_delta},avg_d1_miss_delta: {avg_d1_miss_delta}, avg_lld_miss_delta: {avg_lld_miss_delta} ") 
 def get_source_files(directory="."): 
     folder = Path(directory) 

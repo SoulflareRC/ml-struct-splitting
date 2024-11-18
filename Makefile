@@ -32,3 +32,6 @@ sanity_check_all:
 
 run_all_groupings: # run all groupings on the source file 
 	python3 src/analyze.py --run-all-groupings --source-file=$(source_file) 
+
+run_grouping: 
+	python3 src/analyze.py --run-grouping --grouping-idx=${grouping_idx} --source-file=${source_file} 
