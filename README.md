@@ -23,7 +23,10 @@ Although the system is driven by `src/analyze.py`,  a `Makefile` is included to 
 - `make predict_all model_path=<model_path>`: This runs prediction on all benchmark programs using the specified model.
 - `make predict source_file=<source_file> model_path=<model_path>`: This runs prediction on the source file using the specified model.
 - `make sanity_check source_file=<source_file>`: This runs a basic sanity check on the source file to see if the system runs correctly on the source file.
+- `make sanity_check_all`: This runs sanity check on all source files under `programs/test_programs` to see if the system works correctly on all source files under the folder.
+- `make run_grouping grouping_idx=<grouping_idx> source_file=<source_file>`: This runs the specified grouping method on the specified source file, and outputs score, time delta, d1 miss rate, lld miss rate, and the grouping vectors. 
 - `make run_all_groupings source_file=<source_file>`: This runs all grouping methods on each struct defined in the source file and outputs the scores of each grouping method.
+
 
 ## Score 
 The "best" grouping method is determined by a score obtained by running the transformed executable using each grouping method. The score consists of 3 parts: 
