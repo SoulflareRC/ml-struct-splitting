@@ -254,8 +254,10 @@ class Analyzer {
             }
 
             unordered_map<string, StructDef> struct_table;
+            unordered_set<StructType*> struct_type_set; 
             for(auto &s: structs){
-                if(StructType* st = dyn_cast<StructType>(s)){
+                StructType* st = dyn_cast<StructType>(s); 
+                if(st!=nullptr && (st->getStructName().str().find("struct")!=string::npos)){
                     StructDef st_def; 
                     st_def.name = s->getName(); 
                     st_def.st = st; 
@@ -267,6 +269,7 @@ class Analyzer {
                     st_def.hasMember = hasMemberMap[st]; 
                     st_def.print(errs()); 
                     struct_table[st->getStructName().str()] = st_def; 
+                    struct_type_set.insert(st); 
                 }
             } 
             // get all usages and alloca of structs here. 
@@ -274,7 +277,7 @@ class Analyzer {
                 for(auto &BB: F){
                     for(auto &I:BB){
                         StructType* structType; 
-                        structType = isStructAllocaUsage(&I); 
+                        structType = isStructAllocaUsage(&I, struct_type_set); 
                         if(structType){
                             string structName = structType->getStructName().str(); 
                             errs() << "Alloca of struct: "<< structType->getStructName().str() << "\n"; 
@@ -285,7 +288,7 @@ class Analyzer {
                             struct_table[structName].allocaUsages.insert(dyn_cast<AllocaInst>(&I)); 
                             continue; 
                         }
-                        structType = isStructGEPUsage(&I); 
+                        structType = isStructGEPUsage(&I, struct_type_set); 
                         if(structType){
                             string structName = structType->getStructName().str(); 
                             errs() << "GEP of struct: "<< structType->getStructName().str() << "\n"; 
@@ -303,35 +306,44 @@ class Analyzer {
 
             return struct_table; 
         }
-        StructType* isStructAllocaUsage(Instruction* inst){
+        StructType* isStructAllocaUsage(Instruction* inst, unordered_set<StructType*> struct_type_set){
             if(AllocaInst* allocaInst = dyn_cast<AllocaInst>(inst)){
                 if(allocaInst->getAllocatedType()->isArrayTy()){
                     ArrayType *arrayType = cast<ArrayType>(allocaInst->getAllocatedType());
                     if (arrayType->getElementType()->isStructTy()){
-                        StructType* structType = dyn_cast<StructType>(arrayType->getElementType()); 
-                        return structType;  
+                        StructType* structType = dyn_cast<StructType>(arrayType->getElementType());
+                        if(struct_type_set.find(structType)!=struct_type_set.end()) 
+                            return structType;  
+                        return nullptr;   
                     }
                 }
                 // a struct instantiation 
                 if(allocaInst->getAllocatedType()->isStructTy()){
-                    return dyn_cast<StructType>(allocaInst->getAllocatedType()); 
+                    auto structType =  dyn_cast<StructType>(allocaInst->getAllocatedType()); 
+                    if(struct_type_set.find(structType)!=struct_type_set.end()) 
+                        return structType;
+                    return nullptr; 
                 }
             }
             return nullptr; 
         }
-        StructType* isStructGEPUsage(Instruction* inst){
+        StructType* isStructGEPUsage(Instruction* inst, unordered_set<StructType*> struct_type_set){
             if(GetElementPtrInst* gepInst = dyn_cast<GetElementPtrInst>(inst)){
                 if(gepInst->getSourceElementType()->isArrayTy()){
                     ArrayType* arrayType = cast<ArrayType>(gepInst->getSourceElementType()); 
                     if(arrayType->getElementType()->isStructTy()){
                         StructType* structType = dyn_cast<StructType>(arrayType->getElementType()); 
-                        return structType; 
+                        if(struct_type_set.find(structType)!=struct_type_set.end()) 
+                            return structType;
+                        return nullptr; 
                     }
                 }
                 if(gepInst->getSourceElementType()->isStructTy()){
                     // this is a potential struct access 
-                    StructType *st = cast<StructType>(gepInst->getSourceElementType());
-                    return st; 
+                    StructType *structType = cast<StructType>(gepInst->getSourceElementType());
+                    if(struct_type_set.find(structType)!=struct_type_set.end()) 
+                        return structType;
+                    return nullptr; 
                 } 
             } 
             return nullptr; 

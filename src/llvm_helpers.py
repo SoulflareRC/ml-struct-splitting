@@ -172,7 +172,7 @@ class LLVMHelper:
     def run_analysis_pass(self, suppress_output=False): 
         # Run analysis pass
         # if not suppress_output:
-        print("Running Analysis Pass...")
+        print(f"Running Analysis Pass... Suppress output: {suppress_output}")
         
         # Redirect output to /dev/null (Unix) or nul (Windows) if suppress_output is True
         output_redirection = " > /dev/null 2>&1" if suppress_output else " > analysis.out"
@@ -182,7 +182,7 @@ class LLVMHelper:
     def run_transform_pass(self, suppress_output=False): 
         # Run transform pass
         # if not suppress_output:
-        print("Running Transform Pass...")
+        print(f"Running Transform Pass... Suppress output: {suppress_output}")
         
         # Redirect output to /dev/null (Unix) or nul (Windows) if suppress_output is True
         output_redirection = " > /dev/null 2>&1" if suppress_output else " > opt.out"
