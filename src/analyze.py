@@ -12,6 +12,7 @@ from tqdm import tqdm
 import models 
 from sklearn.model_selection import train_test_split 
 import logging 
+from config import Config 
 # logging.basicConfig(level=logging.DEBUG) 
 logging.basicConfig(level=logging.INFO) 
 ANALYSIS_FNAME="field_loop_analysis.json"
@@ -20,10 +21,11 @@ TRANSFORM_RESULT_FNAME="transform_result.json"
 ANALYSIS_RESULT_FNAME="analysis_result.json" 
 STRUCT_CSV_FNAME = "_grouping_result.csv"
 STRUCT_DATASET_CSV_FNAME = "_dataset_grouping_result.csv"
-TIME_EXECUTABLE_CNT=10
-DEFAULT_TIME_EXECUTABLE_CNT=10 
-MAX_N = 3 
-DEFAULT_MAX_N = 3
+
+# TIME_EXECUTABLE_CNT=10
+# DEFAULT_TIME_EXECUTABLE_CNT=10 
+# MAX_N = 3 
+# DEFAULT_MAX_N = 3
 columns = ['struct_name', 'grouping_idx', 'feature_matrix', 'grouping_vector', 'time_delta', "d1_miss_delta", "lld_miss_delta", "score"]
 dataset_columns = ["feature_grouping_matrices", "target"] 
 # Set pandas options to display the full DataFrame
@@ -32,7 +34,15 @@ pd.set_option('display.max_columns', None)  # No limit on the number of columns
 pd.set_option('display.width', None)  # No limit on the width of the display
 pd.set_option('display.max_colwidth', None)  # No limit on column width
 class StructAnalyzer: 
-    def __init__(self, source_file,build_dir:Path, max_N=DEFAULT_MAX_N, suppress_pass_output=True,  fname=ANALYSIS_FNAME): 
+    # def __init__(self, source_file,build_dir:Path, max_N=DEFAULT_MAX_N, suppress_pass_output=True,  fname=ANALYSIS_FNAME): 
+    def __init__(self, config:Config):
+        self.config = config 
+        source_file = config.source_file 
+        build_dir = config.build_dir 
+        max_N = config.max_N 
+        suppress_pass_output = not config.print_pass_output 
+        self.profile_avg_cnt = config.profile_avg_cnt 
+        
         self.llvm_helper = LLVMHelper(source_file=source_file, build_dir=build_dir) 
         self.grouper_arr = groupers.get_all_groupers(max_N=max_N)
         self.columns = columns 
@@ -171,7 +181,7 @@ class StructAnalyzer:
         total_time_delta = 0; 
         total_d1_miss_delta = 0; # d1 cache miss delta 
         total_lld_miss_delta = 0; # last level d miss delta 
-        for i in range(TIME_EXECUTABLE_CNT): # run multiple times and get average 
+        for i in range(self.profile_avg_cnt): # run multiple times and get average 
             noopt_time = self.time_executable(noopt_fname) 
             opt_time =  self.time_executable(opt_fname) 
             time_delta = (noopt_time - opt_time) / noopt_time # delta is relative to noopt time.  
@@ -196,9 +206,9 @@ class StructAnalyzer:
             total_d1_miss_delta += d1_miss_delta 
             total_lld_miss_delta += lld_miss_delta 
             
-        avg_time_delta = total_time_delta / TIME_EXECUTABLE_CNT 
-        avg_d1_miss_delta = total_d1_miss_delta / TIME_EXECUTABLE_CNT 
-        avg_lld_miss_delta = total_lld_miss_delta / TIME_EXECUTABLE_CNT 
+        avg_time_delta = total_time_delta / self.profile_avg_cnt 
+        avg_d1_miss_delta = total_d1_miss_delta / self.profile_avg_cnt 
+        avg_lld_miss_delta = total_lld_miss_delta / self.profile_avg_cnt 
         logging.debug("total D1: ", total_d1_miss_delta, " total LLD: ", total_lld_miss_delta) 
         
         # calculate score, want to maximize this  
@@ -307,7 +317,6 @@ class StructAnalyzer:
         ''' 
         this method will transform the code using the loaded selector model 
         '''
-        
         # load model first 
         selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
         selector_model.load_model(model_path)  
@@ -388,7 +397,7 @@ def get_source_files(directory="."):
     print(files) 
     return files 
     
-def analyzer_all_benchmarks(directory=".", build_dir=Path("build")): 
+def analyze_all_benchmarks(directory=".", build_dir=Path("build")): 
     folder = Path(directory) 
     print(f"Analyzing all benchmarks under folder {folder}")
     df = pd.DataFrame(columns=columns)
@@ -427,6 +436,11 @@ def train_selector(ds_df:pd.DataFrame, epochs=100):
     selector_model.train(ds_df=ds_df, epochs=epochs) 
     selector_model.test(ds_df=ds_df)  
     selector_model.save_model() 
+
+def evaluate_selector(ds_df:pd.DataFrame, model_path:Path=Path(models.DEFAULT_MODEL_PATH)): 
+    selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
+    selector_model.load_model(model_path) 
+    selector_model.evaluate(ds_df) 
 
 def predict_and_transform_all(directory=".", build_dir=Path("build"), model_path=models.DEFAULT_MODEL_PATH): 
     folder = Path(directory) 
@@ -476,128 +490,132 @@ def sanity_check_all(directory=".", build_dir=Path("build")):
         analyzer.load_analysis_file()
         analyzer.sanity_check()
 
-def main(): 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--run-analysis-pass", action="store_true", help="Run analysis pass on C source file") 
-    parser.add_argument("--run-all-groupings", action="store_true", help="Run transform using all grouping methods and record time delta for all individual structs (Example: If there are C grouping methods and S structs, then there will be a total of C*S probabilities), then generate a csv recording the result") 
-    parser.add_argument("--run-grouping", action="store_true", help="Run analysis pass on C source file") 
-    parser.add_argument("--grouping-idx", type=int, help="selected grouping index") 
-    parser.add_argument("--print-pass-output", action="store_true", help="un-suppress analysis and transform pass output") 
-    parser.add_argument("--max-N", type=int, default=DEFAULT_MAX_N, help="The (maximum) number of groups each struct will be divided into") 
+
+# deprecated 
+# def main(): 
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument("--run-analysis-pass", action="store_true", help="Run analysis pass on C source file") 
+#     parser.add_argument("--run-all-groupings", action="store_true", help="Run transform using all grouping methods and record time delta for all individual structs (Example: If there are C grouping methods and S structs, then there will be a total of C*S probabilities), then generate a csv recording the result") 
+#     parser.add_argument("--run-grouping", action="store_true", help="Run analysis pass on C source file") 
+#     parser.add_argument("--grouping-idx", type=int, help="selected grouping index") 
+#     parser.add_argument("--print-pass-output", action="store_true", help="un-suppress analysis and transform pass output") 
+#     parser.add_argument("--max-N", type=int, default=DEFAULT_MAX_N, help="The (maximum) number of groups each struct will be divided into") 
     
-    parser.add_argument("--cleanup-files", action="store_true", help="Clean up files") 
-    parser.add_argument("--sanity-check", action="store_true", help="Check if code still works after transformation") 
-    parser.add_argument("--sanity-check-all", action="store_true", help="Check if code still works after transformation for all source files under folder") 
-    parser.add_argument("--transform-all", action="store_true", help="Transform all code with machine learning model prediction")
-    parser.add_argument("--predict-transform", action="store_true", help="Transform code with machine learning model prediction")
-    parser.add_argument("--analyze-all", action="store_true", help="Generate dataset for all structs in all benchmarks")
+#     parser.add_argument("--cleanup-files", action="store_true", help="Clean up files") 
+#     parser.add_argument("--sanity-check", action="store_true", help="Check if code still works after transformation") 
+#     parser.add_argument("--sanity-check-all", action="store_true", help="Check if code still works after transformation for all source files under folder") 
+#     parser.add_argument("--transform-all", action="store_true", help="Transform all code with machine learning model prediction")
+#     parser.add_argument("--predict-transform", action="store_true", help="Transform code with machine learning model prediction")
+#     parser.add_argument("--analyze-all", action="store_true", help="Generate dataset for all structs in all benchmarks")
     
-    parser.add_argument("--analyze-and-transform-all", action="store_true", help="Train and predict all")
-    parser.add_argument("--search-all", action="store_true", help="Generate dataset for all structs") 
-    parser.add_argument("--run-all", action="store_true", help="Run all") 
-    parser.add_argument("--run-setup", action="store_true", help="Generate bitcode and profile data given the C source file")  
-    parser.add_argument("--generate-groupings", action="store_true", help="Generate groupings.json for transformation pass") 
-    parser.add_argument("--time-executables", action="store_true", help="Generate time data for unoptimized and optimized executables") 
-    parser.add_argument("--opt-fname", type=str, help="Optimized executable") 
-    parser.add_argument("--noopt-fname", type=str, help="Unoptimized executable") 
-    parser.add_argument("--source-file", type=str, help="The C source file without extension", default="programs/test_programs/test.c") 
-    parser.add_argument("--benchmark-dir", type=str, help="Directory for benchmark folder", default="programs/test_programs")  
-    parser.add_argument("--profile-avg-cnt", type=int, help="Number of iterations to run when profiling runtime and cache misses", default=DEFAULT_TIME_EXECUTABLE_CNT)  
-    parser.add_argument("--train-epochs", type=int, help="Number epochs to train the model on the training data", default=100)  
-    parser.add_argument("--model-path", type=str, help="Path to the saved model pth file", default=models.DEFAULT_MODEL_PATH)  
-    parser.add_argument("--build-dir", type=str, help="The build directory used to build the pass plugin", default="build") 
-    args = parser.parse_args() 
+#     parser.add_argument("--analyze-and-transform-all", action="store_true", help="Train and predict all")
+#     parser.add_argument("--search-all", action="store_true", help="Generate dataset for all structs") 
+#     parser.add_argument("--analyze-and-transform-all", action="store_true", help="Evaluate model") 
+#     parser.add_argument("--run-all", action="store_true", help="Run all") 
+#     parser.add_argument("--run-setup", action="store_true", help="Generate bitcode and profile data given the C source file")  
+#     parser.add_argument("--generate-groupings", action="store_true", help="Generate groupings.json for transformation pass") 
+#     parser.add_argument("--time-executables", action="store_true", help="Generate time data for unoptimized and optimized executables") 
+#     parser.add_argument("--opt-fname", type=str, help="Optimized executable") 
+#     parser.add_argument("--noopt-fname", type=str, help="Unoptimized executable") 
+#     parser.add_argument("--source-file", type=str, help="The C source file without extension", default="programs/test_programs/test.c") 
+#     parser.add_argument("--benchmark-dir", type=str, help="Directory for benchmark folder", default="programs/test_programs")  
+#     parser.add_argument("--profile-avg-cnt", type=int, help="Number of iterations to run when profiling runtime and cache misses", default=DEFAULT_TIME_EXECUTABLE_CNT)  
+#     parser.add_argument("--train-epochs", type=int, help="Number epochs to train the model on the training data", default=100)  
+#     parser.add_argument("--model-path", type=str, help="Path to the saved model pth file", default=models.DEFAULT_MODEL_PATH)  
+#     parser.add_argument("--build-dir", type=str, help="The build directory used to build the pass plugin", default="build") 
+#     args = parser.parse_args() 
      
-    #  make use of args 
-    source_file = args.source_file 
-    source_file = Path(source_file) 
-    print_pass_output = args.print_pass_output 
-    suppress_output = not print_pass_output 
-    benchmark_dir = Path(args.benchmark_dir)
-    build_dir = Path(args.build_dir)  
-    profile_avg_cnt = int(args.profile_avg_cnt)  
-    TIME_EXECUTABLE_CNT = profile_avg_cnt 
-    train_epochs = args.train_epochs 
-    model_path = Path(args.model_path) 
-    print("Print pass output: ", print_pass_output)
-    print("Benchmark directory: ", benchmark_dir)
-    max_N = int(args.max_N)  
-    print("max_N: ", max_N)
-    start = time.time() 
-    if args.cleanup_files: 
-        print("Cleaning up files") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output) 
-        analyzer.llvm_helper.cleanup_files() 
-    if args.run_analysis_pass: 
-        print(f"Run analysis pass on source file {source_file}")
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output) 
-        analyzer.run_analysis_pass() 
-        print(f"Analysis matrices stored in field_loop_analysis.json") 
-    if args.run_all_groupings: 
-        print(f"Run all groupings on source file {source_file}") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
-        analyzer.run_all_groupings() 
-    if args.run_grouping: 
-        print(f"Run grouping method on all structs of source file {source_file}") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
-        print("grouping idx: ", args.grouping_idx)
-        grouping_idx = args.grouping_idx   
-        analyzer.run_grouping(grouping_idx=grouping_idx)
-    if args.run_setup: 
-        print("Run Setup") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir,suppress_pass_output=suppress_output)
-        analyzer.run_setup() 
-    if args.generate_groupings:
-        print("Generate groupings") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir,suppress_pass_output=suppress_output)
-        analyzer.generate_groupings() 
-    if args.time_executables: 
-        print("Time executables")
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir,suppress_pass_output=suppress_output)
-        analyzer.time_executables(args.noopt_fname, args.opt_fname) 
-    if args.run_all: 
-        print("Run all") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
-        analyzer.run_setup() 
-        analyzer.generate_groupings() 
-        analyzer.run_transform() 
-    if args.search_all: 
-        print("Search all") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
-        analyzer.run_setup() 
-        analyzer.load_analysis_file() 
-        analyzer.search_all_structs()
-    if args.analyze_all:
-        print("Analyze all" )
-        df, ds_df = analyzer_all_benchmarks(directory=benchmark_dir, build_dir=build_dir)
-        train_selector(ds_df=ds_df, epochs=train_epochs)   
-    if args.transform_all: 
-        predict_and_transform_all(directory=benchmark_dir, build_dir=build_dir, model_path=model_path)  
-    if args.analyze_and_transform_all: 
-        print("Analyze and transform all" )
-        df, ds_df = analyzer_all_benchmarks(directory=benchmark_dir, build_dir=build_dir)
-        train_selector(ds_df=ds_df, epochs=train_epochs)
-        predict_and_transform_all(directory=benchmark_dir, build_dir=build_dir)
-    if args.predict_transform:
-        source_file = Path(source_file) 
-        print(f"Predict transform for source file: {source_file}") 
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
-        analyzer.run_setup() 
-        analyzer.load_analysis_file()
-        analyzer.make_prediction(model_path) 
-    if args.sanity_check: 
-        source_file = Path(source_file) 
-        print(f"Running sanity check for source file: {source_file}")
-        analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
-        analyzer.run_setup() 
-        analyzer.load_analysis_file()
-        analyzer.sanity_check()
-    if args.sanity_check_all: 
-        print(f"Running sanity check for benchmark directory: {benchmark_dir}") 
-        sanity_check_all(benchmark_dir, build_dir) 
+#     #  make use of args 
+#     source_file = args.source_file 
+#     source_file = Path(source_file) 
+#     print_pass_output = args.print_pass_output 
+#     suppress_output = not print_pass_output 
+#     benchmark_dir = Path(args.benchmark_dir)
+#     build_dir = Path(args.build_dir)  
+#     profile_avg_cnt = int(args.profile_avg_cnt)  
+#     TIME_EXECUTABLE_CNT = profile_avg_cnt 
+#     train_epochs = args.train_epochs 
+#     model_path = Path(args.model_path) 
+#     print("Print pass output: ", print_pass_output)
+#     print("Benchmark directory: ", benchmark_dir)
+#     max_N = int(args.max_N)  
+#     print("max_N: ", max_N)
+#     start = time.time() 
+#     if args.cleanup_files: 
+#         print("Cleaning up files") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output) 
+#         analyzer.llvm_helper.cleanup_files() 
+#     if args.run_analysis_pass: 
+#         print(f"Run analysis pass on source file {source_file}")
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output) 
+#         analyzer.run_analysis_pass() 
+#         print(f"Analysis matrices stored in field_loop_analysis.json") 
+#     if args.run_all_groupings: 
+#         print(f"Run all groupings on source file {source_file}") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
+#         analyzer.run_all_groupings() 
+#     if args.run_grouping: 
+#         print(f"Run grouping method on all structs of source file {source_file}") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
+#         print("grouping idx: ", args.grouping_idx)
+#         grouping_idx = args.grouping_idx   
+#         analyzer.run_grouping(grouping_idx=grouping_idx)
+#     if args.run_setup: 
+#         print("Run Setup") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir,suppress_pass_output=suppress_output)
+#         analyzer.run_setup() 
+#     if args.generate_groupings:
+#         print("Generate groupings") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir,suppress_pass_output=suppress_output)
+#         analyzer.generate_groupings() 
+#     if args.time_executables: 
+#         print("Time executables")
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir,suppress_pass_output=suppress_output)
+#         analyzer.time_executables(args.noopt_fname, args.opt_fname) 
+#     if args.run_all: 
+#         print("Run all") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
+#         analyzer.run_setup() 
+#         analyzer.generate_groupings() 
+#         analyzer.run_transform() 
+#     if args.search_all: 
+#         print("Search all") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
+#         analyzer.run_setup() 
+#         analyzer.load_analysis_file() 
+#         analyzer.search_all_structs()
+#     if args.analyze_all:
+#         print("Analyze all" )
+#         df, ds_df = analyze_all_benchmarks(directory=benchmark_dir, build_dir=build_dir)
+#         train_selector(ds_df=ds_df, epochs=train_epochs)   
+#     if args.transform_all: 
+#         predict_and_transform_all(directory=benchmark_dir, build_dir=build_dir, model_path=model_path)  
+#     if args.analyze_and_transform_all: 
+#         print("Analyze and transform all" )
+#         df, ds_df = analyze_all_benchmarks(directory=benchmark_dir, build_dir=build_dir)
+#         train_selector(ds_df=ds_df, epochs=train_epochs)
+#         predict_and_transform_all(directory=benchmark_dir, build_dir=build_dir)
+#     if args.predict_transform:
+#         source_file = Path(source_file) 
+#         print(f"Predict transform for source file: {source_file}") 
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
+#         analyzer.run_setup() 
+#         analyzer.load_analysis_file()
+#         analyzer.make_prediction(model_path) 
+#     if args.sanity_check: 
+#         source_file = Path(source_file) 
+#         print(f"Running sanity check for source file: {source_file}")
+#         analyzer = StructAnalyzer(source_file=source_file, build_dir=build_dir, suppress_pass_output=suppress_output)
+#         analyzer.run_setup() 
+#         analyzer.load_analysis_file()
+#         analyzer.sanity_check()
+#     if args.sanity_check_all: 
+#         print(f"Running sanity check for benchmark directory: {benchmark_dir}") 
+#         sanity_check_all(benchmark_dir, build_dir) 
         
         
-    duration = time.time() - start 
-    print(f"Run took {duration} seconds")  
-if __name__ == "__main__": 
-    main() 
+#     duration = time.time() - start 
+#     print(f"Run took {duration} seconds")  
+# if __name__ == "__main__": 
+#     main() 
+

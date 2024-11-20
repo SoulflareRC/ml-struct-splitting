@@ -45,7 +45,6 @@
 #define GROUPING_FNAME "groupings.json"
 
 
-
 // #ifndef HEADER_ANALYZER_H 
 // #define HEADER_ANALYZER_H 
 #pragma once 
@@ -243,9 +242,12 @@ class Analyzer {
                 if(StructType* st = dyn_cast<StructType>(s)){
                     for(int i = 0;i<s->getNumElements();i++){
                         auto member = st->getElementType(i); 
-                        if(member->isStructTy()){
-                            errs() << "Member: " << member->getStructName().str() << " is a struct!!!\n"; 
-                            StructType* memberStruct = dyn_cast<StructType>(member); 
+                        // if(member->isStructTy()){
+                        StructType* memberSt = isStructType(member); 
+                        if(memberSt!=nullptr){
+                            // errs() << "Member: " << member->getStructName().str() << " is a struct!!!\n"; 
+                            // StructType* memberStruct = dyn_cast<StructType>(member);
+                            StructType* memberStruct = memberSt;  
                             isMemberMap[memberStruct].insert(st); 
                             hasMemberMap[st].insert(memberStruct); 
                         }
@@ -305,6 +307,24 @@ class Analyzer {
             
 
             return struct_table; 
+        }
+
+        StructType* isStructType(Type* t) {
+            if (!t) {
+                return nullptr; // Handle null input
+            }
+
+            // Direct case: Check if the type is a StructType
+            if (auto* structTy = dyn_cast<StructType>(t)) {
+                return structTy;
+            }
+
+            if (auto *arrTy = dyn_cast<ArrayType>(t)){
+                auto *structType = dyn_cast<StructType>(arrTy->getElementType()); 
+                return structType; 
+            }
+
+            return nullptr; // Not a struct or related type
         }
         StructType* isStructAllocaUsage(Instruction* inst, unordered_set<StructType*> struct_type_set){
             if(AllocaInst* allocaInst = dyn_cast<AllocaInst>(inst)){
@@ -394,10 +414,19 @@ class Analyzer {
                     int loop_execution_cnt = 0; 
                     // Iterate over basic blocks inside the loop
                     for (BasicBlock *BB : L->blocks()) {
-                        auto blockExecCount = BFA.getBlockProfileCount(BB).value(); 
-                        bbCntTable[BB] = blockExecCount;
+                        errs() << "\nBB "<<BB<<": "; 
+                        BB->print(errs()); 
+                        errs() << "\n"; 
+                        if(auto profCnt = BFA.getBlockProfileCount(BB)) {
+                            auto blockExecCount = profCnt.value(); 
+                            bbCntTable[BB] = blockExecCount;
+                            errs() << "Block execution count: " << blockExecCount << "\n";
+                            loop_execution_cnt += blockExecCount;
+                        }
+                        // auto blockExecCount = BFA.getBlockProfileCount(BB).value(); 
+                        // bbCntTable[BB] = blockExecCount;
                         // errs() << "Block execution count: " << blockExecCount << "\n";
-                        loop_execution_cnt += blockExecCount; 
+                        // loop_execution_cnt += blockExecCount; 
                     }
 
                     errs()<<"loop dynamic inst count: "<<loop_execution_cnt<<"\n"; 

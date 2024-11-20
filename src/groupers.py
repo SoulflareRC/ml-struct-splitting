@@ -14,6 +14,8 @@ class Grouper:
         the data here should be a numpy matrix that's F x L, each row is a feature vector 
         '''
         raise NotImplementedError("Subclasses should implement this!")
+    def name(self): 
+        return self.__class__.__name__ 
 
 def remap_to_contiguous(groups: np.ndarray) -> np.ndarray:
     """
@@ -201,25 +203,28 @@ GROUPERS = [
 ]
 GROUPERS_CNT = len(GROUPERS) 
 
+def get_all_grouper_names(): 
+    return [grouper_class.__name__ for grouper_class in GROUPERS]
+
 def get_all_groupers(max_N=MAX_N):
     return [grouper_class(max_N=max_N) for grouper_class in GROUPERS]
 
 
-
-
 # Example usage
 if __name__ == "__main__":
+    print(get_all_grouper_names()) 
+    
     # Creating a sample n x m numpy array (e.g., 5 rows, 3 columns)
-    data = np.array([[1, 2, 0],
-                     [4, 0, 0],
-                     [7, 3, 0],
-                     [10, 11, 0],
-                     [13, 14, 4000]])
+    # data = np.array([[1, 2, 0],
+    #                  [4, 0, 0],
+    #                  [7, 3, 0],
+    #                  [10, 11, 0],
+    #                  [13, 14, 4000]])
     
     
-    grouper = GMMGrouper(max_N=3) 
-    groups = grouper.assign_groups(data) 
-    print("Groups: \n", groups)
+    # grouper = GMMGrouper(max_N=3) 
+    # groups = grouper.assign_groups(data) 
+    # print("Groups: \n", groups)
     
     # grouper = SpectralGrouper(max_N=3) 
     # groups = grouper.assign_groups(data) 

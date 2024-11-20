@@ -1,8 +1,16 @@
+import numpy as np 
 import torch 
 import torch.nn as nn 
 import torch.optim as optim
+import torch.nn.functional as F 
 from tqdm import tqdm  
 import pandas as pd 
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
+from sklearn.metrics import roc_curve, auc
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.preprocessing import label_binarize
+import groupers 
 '''
 The core machine learning pipeline. 
 
@@ -110,23 +118,147 @@ class GroupingSelector:
     
     def test(self, ds_df: pd.DataFrame): 
         with torch.no_grad(): 
+            all_preds = []
+            all_targets = []
+            all_probs = []  # List to store the predicted probabilities
             total_test_cnt = 0 
             total_correct_cnt = 0 
+
             for idx, row in ds_df.iterrows(): 
+                # Extract the target and feature grouping matrices from the row
                 target = row["target"] 
                 feature_grouping_matrices = row["feature_grouping_matrices"] 
                 target = torch.tensor(target).long().unsqueeze(0) 
                 feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32).unsqueeze(0)
+                
+                # Forward pass through the model
                 output = self.model(feature_grouping_matrices) 
-                prediction = torch.argmax(output, dim=1) 
-                print(f"target: {target} prediction: {prediction}")
+                
+                # Get the predicted class (argmax)
+                prediction = torch.argmax(output, dim=1)
+                
+                # Get the predicted probabilities using softmax (convert logits to probabilities)
+                probs = F.softmax(output, dim=1).squeeze(0).cpu().numpy()  # Convert to numpy array
+                
+                # Collect predictions, probabilities, and targets for later evaluation
+                all_preds.append(prediction.item())
+                all_targets.append(target.item())
+                all_probs.append(probs)  # Append the probabilities for each class
+                
+                # Calculate the test count and correct count
                 test_cnt = prediction.numel()
-                correct_cnt = (prediction == target).sum() 
-                print(f"test cnt: {test_cnt} correct cnt: {correct_cnt}" )
+                correct_cnt = (prediction == target).sum()
                 total_test_cnt += test_cnt 
                 total_correct_cnt += correct_cnt 
+
+            # Calculate total accuracy
             total_correct_rate = total_correct_cnt / total_test_cnt 
-            print(f"total test cnt: {total_test_cnt} total correct cnt: {total_correct_cnt} total correct rate {total_correct_rate}")
+            print(f"Total test count: {total_test_cnt}, Total correct count: {total_correct_cnt}, Total correct rate: {total_correct_rate}")
+
+            # Convert the list of probabilities into a numpy array (shape: [num_samples, num_classes])
+            all_probs = np.array(all_probs)
+
+            # Return the predictions, targets, and probabilities
+            return np.array(all_preds), np.array(all_targets), all_probs
+
+    def get_conf_matrix(self, preds, targets): 
+        cm = confusion_matrix(targets, preds)  
+        fig, ax = plt.subplots() 
+        cax = ax.matshow(cm, cmap=plt.cm.Blues, interpolation="nearest") 
+        cbar = fig.colorbar(cax, fraction=0.046, pad=0.04) 
+        cbar.set_label("Frequency", rotation=270, labelpad=10) 
+        for (i, j), z in np.ndenumerate(cm): 
+            ax.text(j,i,z,ha="center", va="center")
+        grouper_names = groupers.get_all_grouper_names() 
+        labels = "" 
+        for idx, name in enumerate(grouper_names): 
+            labels += f"{idx} : {name} \n" 
+          
+        plt.gcf().text(0.02, 0.4, labels, fontsize=9) 
+        plt.subplots_adjust(left=0.5) 
+        ax.set_xlabel("Predictions") 
+        ax.xaxis.set_label_position("top") 
+        ax.set_ylabel("True Labels") 
+        plt.savefig("confusion_matrix.png")  
+        plt.close() 
+
+    def plot_roc_curve(self, preds, targets, output_file='roc_curve.png'):
+        # Binarize the targets for multi-class ROC curve
+        lb = LabelBinarizer()
+        targets_bin = lb.fit_transform(targets)  # Convert to binary labels (one-hot encoding)
+        # print("targets_bin: ", targets_bin) 
+        
+        # Get the class probabilities (preds should be probabilities, not hard predictions)
+        # Example: for a model like Logistic Regression, preds can be the probabilities outputted by the model.
+        # If preds contains hard class labels, you need to get probabilities from your model.
+        preds_prob = preds  # Assuming preds contains the probability for each class (shape: [n_samples, n_classes])
+        
+        # Calculate ROC curve for each class
+        n_classes = targets_bin.shape[1]
+        fpr = dict()
+        tpr = dict()
+        roc_auc = dict()
+
+        for i in range(n_classes):
+            fpr[i], tpr[i], _ = roc_curve(targets_bin[:, i], preds_prob[:, i])
+            roc_auc[i] = auc(fpr[i], tpr[i])
+
+        # Plot the ROC curves for each class
+        plt.figure(figsize=(10, 8))
+
+        # Plot the ROC curve for each class
+        for i in range(n_classes):
+            plt.plot(fpr[i], tpr[i], lw=2, label=f'Class {lb.classes_[i]} (AUC = {roc_auc[i]:.2f})')
+
+        # Plot the diagonal line (no-skill line)
+        plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')
+
+        # Labels and title
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Multi-Class ROC Curve')
+        plt.legend(loc='lower right')
+
+        # Save the figure to a file
+        plt.savefig(output_file)
+        print(f"ROC curve saved as {output_file}")
+        plt.close()  # Close the plot to release resources
+
+        # Calculate and print the overall AUC (macro average)
+        overall_auc = np.mean(list(roc_auc.values()))
+        print(f"Overall Macro Average AUC: {overall_auc:.2f}")
+
+    def evaluate(self, ds_df: pd.DataFrame, output_image_path: str = "confusion_matrix.png"):
+        # Get predictions and targets
+        preds, targets, probs = self.test(ds_df)
+        print(f"preds: {preds} \n targets: {targets} \n probs: {probs}")
+
+        # Calculate metrics
+        accuracy = accuracy_score(targets, preds)
+        precision = precision_score(targets, preds, average='macro', zero_division=0)
+        recall = recall_score(targets, preds, average='macro', zero_division=0)
+        f1 = f1_score(targets, preds, average='macro', zero_division=0)
+
+        print(f"Accuracy: {accuracy:.4f}")
+        print(f"Precision: {precision:.4f}")
+        print(f"Recall: {recall:.4f}")
+        print(f"F1 Score: {f1:.4f}")
+        
+        self.get_conf_matrix(preds=preds, targets=targets) 
+
+        self.plot_roc_curve(preds=probs, targets=targets) 
+
+    def model_output_to_probs(self, ds_df: pd.DataFrame):
+        """Convert model outputs to probabilities (for ROC and AUC)"""
+        all_probs = []
+        with torch.no_grad():
+            for idx, row in ds_df.iterrows(): 
+                feature_grouping_matrices = row["feature_grouping_matrices"] 
+                feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32).unsqueeze(0)
+                output = self.model(feature_grouping_matrices) 
+                probs = torch.nn.functional.softmax(output, dim=1)
+                all_probs.append(probs.numpy())
+        return np.array(all_probs)
     
     def predict(self, feature_grouping_matrices):
         feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32).unsqueeze(0)
