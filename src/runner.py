@@ -21,6 +21,7 @@ TRANSFORM_RESULT_FNAME="transform_result.json"
 ANALYSIS_RESULT_FNAME="analysis_result.json" 
 STRUCT_CSV_FNAME = "_grouping_result.csv"
 STRUCT_DATASET_CSV_FNAME = "_dataset_grouping_result.csv"
+TRANSFORM_RESULT_CSV_FNAME="_transform_result.csv" 
 columns = ['struct_name', 'grouping_idx', 'feature_matrix', 'grouping_vector', 'time_delta', "d1_miss_delta", "lld_miss_delta", "score"]
 dataset_columns = ["feature_grouping_matrices", "target"] 
 # Set pandas options to display the full DataFrame
@@ -58,10 +59,11 @@ class Runner:
         
         parser.add_argument("--sanity-check", action="store_true", help="Check if code still works after transformation")
         parser.add_argument("--sanity-check-all", action="store_true", help="Check if code still works after transformation for all source files under folder") 
-        
         parser.add_argument("--evaluate-model", action="store_true", help="Evaluate model on all benchmarks")
+        parser.add_argument("--analyze-transform-result", action="store_true", help="Takes a given transform result csv file and analyzes it and generates charts") 
         
         # config parameters 
+        parser.add_argument("--transform-result-path", type=str, help="The transform result csv file", default="test_"+TRANSFORM_RESULT_CSV_FNAME)
         parser.add_argument("--grouping-idx", type=int, help="selected grouping index")
         parser.add_argument("--print-pass-output", action="store_true", help="un-suppress analysis and transform pass output")
         parser.add_argument("--max-N", type=int, default=10, help="The (maximum) number of groups each struct will be divided into")
@@ -160,6 +162,67 @@ class Runner:
         print("Analyzing all benchmarks and training model") 
         df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
         self.train_selector(ds_df=ds_df, epochs=self.config.train_epochs)
+    
+        
+    def analyze_and_generate_bar_charts(self, transform_result_df: pd.DataFrame, output_dir: Path = Path(".")):
+        """
+        Analyzes the statistics of scores, time_delta, d1_miss_delta, lld_miss_delta,
+        and generates bar charts for each of these columns, saving them to files.
+        
+        Parameters:
+        - transform_result_df: A DataFrame containing the columns 'file', 'score', 'time_delta', 
+                                'd1_miss_delta', and 'lld_miss_delta'.
+        - output_dir: Directory path where the bar charts should be saved.
+        """
+        
+        # Ensure the output directory exists
+        if not output_dir.exists(): 
+            output_dir.mkdir(parents=True, exist_ok=True) 
+        
+        # Calculate basic statistics
+        stats = transform_result_df[['score', 'time_delta', 'd1_miss_delta', 'lld_miss_delta']].describe()
+        
+        # Print out the statistics (optional)
+        print("Statistics Summary:\n", stats)
+        
+        # Create bar charts for each column
+        # Loop through each row in the dataframe
+        # List of columns to generate bar charts for
+        # List of columns to generate bar charts for
+        columns = ['score', 'time_delta', 'd1_miss_delta', 'lld_miss_delta']
+        
+        # Loop through each of the columns (e.g., score, time_delta, etc.)
+        for column in columns:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            
+            # Extract the data for the current column and file names
+            bars = ax.bar(transform_result_df['file'], transform_result_df[column], color='skyblue')
+            
+            # Annotate each bar with its value
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width() / 2, height, 
+                        f'{height:.2f}', ha='center', va='bottom', fontsize=10, color='black')
+            
+            # Set chart title and labels
+            ax.set_title(f'{column} for Each File', fontsize=16)
+            ax.set_ylabel(column, fontsize=12)
+            ax.set_xlabel('File', fontsize=12)
+            ax.set_xticklabels(transform_result_df['file'], rotation=45, ha='right')
+            
+            # Save the figure to the output directory
+            chart_fname = output_dir.joinpath(f'{column}_bar_chart.png')
+            plt.tight_layout()
+            plt.savefig(chart_fname)
+            plt.close()
+        
+        print(f"Bar charts saved to: {output_dir}")
+    
+    
+    def analyze_transform_result(self): 
+        print("Analyzing transform result") 
+        df = pd.read_csv(self.config.transform_result_path)  
+        self.analyze_and_generate_bar_charts(df)     
 
     def predict_and_transform_all(self, directory=".", build_dir=Path("build"), model_path=models.DEFAULT_MODEL_PATH): 
         folder = Path(directory) 
@@ -167,6 +230,8 @@ class Runner:
         transform_result_dict = {} 
         total_cnt = 0 
         positive_cnt = 0
+        columns = ["file", "grouping_ids_dict", "score", "time_delta", "d1_miss_rate", "lld_miss_delta"]
+        transform_result_df = pd.DataFrame(columns=columns) 
         
         files = self.get_source_files(folder) 
         
@@ -183,14 +248,17 @@ class Runner:
                 analyzer.load_analysis_file()
                 # _, grouping_ids_dict, time_delta =  analyzer.make_prediction(model_path=model_path) 
                 _, grouping_ids_dict, score, avg_time_delta, avg_d1_miss_delta, avg_lld_miss_delta = analyzer.make_prediction(model_path=model_path)
-                analyzer.llvm_helper.cleanup_files() # cleanup files     
-                transform_result_dict[f.name] ={
+                analyzer.llvm_helper.cleanup_files() # cleanup files
+                transform_result = {
+                    "file": f.name, 
                     "grouping_ids_dict": grouping_ids_dict, 
-                    "score" : score, 
-                    "time_delta" : avg_time_delta, 
-                    "d1_miss_delta": avg_d1_miss_delta, 
-                    "lld_miss_delta" : avg_lld_miss_delta 
+                    "score" : score*100, 
+                    "time_delta" : avg_time_delta*100,  
+                    "d1_miss_delta": avg_d1_miss_delta*100, 
+                    "lld_miss_delta" : avg_lld_miss_delta*100 # scale into percentage 
                 }
+                transform_result_dict[f.name] = transform_result
+                transform_result_df = transform_result_df._append(transform_result, ignore_index=True) 
                 total_cnt += 1 
                 if score > 0: 
                     positive_cnt+=1 
@@ -201,6 +269,8 @@ class Runner:
         with open(TRANSFORM_RESULT_FNAME, "w") as f: 
             json.dump(transform_result_dict, f, indent=4) 
 
+        transform_result_df.to_csv(f"test_{TRANSFORM_RESULT_CSV_FNAME}", index=False) 
+        self.analyze_and_generate_bar_charts(transform_result_df)
 
     def transform_all(self):
         self.predict_and_transform_all(directory=self.config.benchmark_dir, build_dir=self.config.build_dir, model_path=self.config.model_path)
@@ -285,4 +355,6 @@ class Runner:
         if self.config.evaluate_model: 
             self.evaluate_model()
 
+        if self.config.analyze_transform_result: 
+            self.analyze_transform_result() 
 

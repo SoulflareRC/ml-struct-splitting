@@ -152,6 +152,8 @@ class KMeansGrouper(Grouper):
         """Assign rows to group with KMeans clustering."""
         n_datapoint = data.shape[0] 
         n_clusters = min(n_datapoint, self.max_N) 
+        if n_datapoint == 1:  # Special case for single data point
+            return np.array([0])  # Assign it to group 0 (or any group)
         clusterer = KMeans(n_clusters=n_clusters) 
         labels = clusterer.fit_predict(data) 
         # print("kmeans_labels: ", labels) 
@@ -164,6 +166,9 @@ class AgglomerativeGrouper(Grouper):
         """Assign rows to group with Agglomerative(hierarchical) clustering."""
         n_datapoint = data.shape[0] 
         n_clusters = min(n_datapoint, self.max_N)
+        print(f"shape: {data.shape} max_N: {self.max_N} n_clusters: {n_clusters}")
+        if n_datapoint == 1:  # Special case for single data point
+            return np.array([0])  # Assign it to group 0 (or any group)
         clusterer = AgglomerativeClustering(n_clusters=n_clusters) 
         labels = clusterer.fit_predict(data)  
         return labels 
@@ -175,6 +180,8 @@ class SpectralGrouper(Grouper):
         """Assign rows to group with Agglomerative(hierarchical) clustering."""
         n_datapoint = data.shape[0] 
         n_clusters = min(n_datapoint, self.max_N)
+        if n_datapoint == 1:  # Special case for single data point
+            return np.array([0])  # Assign it to group 0 (or any group)
         clusterer = SpectralClustering(n_clusters=n_clusters, affinity="rbf", gamma=1.0) 
         labels = clusterer.fit_predict(data)  
         return labels 
@@ -187,6 +194,8 @@ class GMMGrouper(Grouper):
         """Assign rows to group with Agglomerative(hierarchical) clustering."""
         n_datapoint = data.shape[0] 
         n_clusters = min(n_datapoint, self.max_N)
+        if n_datapoint == 1:  # Special case for single data point
+            return np.array([0])  # Assign it to group 0 (or any group)
         clusterer = GaussianMixture(n_components=n_clusters) 
         labels = clusterer.fit_predict(data)  
         return labels 
