@@ -16,6 +16,8 @@ from config import Config
 from datetime import datetime
 import ast 
 import time 
+from sklearn.model_selection import train_test_split 
+from collections import Counter 
 # logging.basicConfig(level=logging.DEBUG) 
 logging.basicConfig(level=logging.INFO) 
 ANALYSIS_FNAME="field_loop_analysis.json"
@@ -192,14 +194,15 @@ class Runner:
         return df, ds_df 
 
     def train_selector(self, ds_df:pd.DataFrame, epochs=100):  
-        # train_df, test_df = train_test_split(ds_df, test_size=0.2) 
+        train_df, test_df = train_test_split(ds_df, test_size=0.2) 
         selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size)  
-        # selector_model.train(ds_df=train_df, epochs=100) 
-        # selector_model.test(ds_df=test_df)  
-        # print("ds df: \n", ds_df) 
+        print(f"Dataset size: {len(ds_df)} Training Size: {len(train_df)} Testing Size: {len(test_df)}") 
         selector_model.train(ds_df=ds_df, epochs=epochs) 
         selector_model.test(ds_df=ds_df)  
-        selector_model.evaluate(ds_df=ds_df)
+        selector_model.evaluate(ds_df=ds_df, output_dir=self.config.experiment_dir) 
+        # selector_model.train(ds_df=train_df, epochs=epochs) 
+        # selector_model.test(ds_df=test_df)  
+        # selector_model.evaluate(ds_df=test_df, output_dir=self.config.experiment_dir) 
         # selector_model.save_model( self.config.experiment_dir.joinpath(self.config.model_path)) 
         selector_model.save_model( self.config.experiment_dir.joinpath(f"model.pth"))  
 
@@ -245,10 +248,89 @@ class Runner:
             output_dir.mkdir(parents=True, exist_ok=True) 
         
         # Calculate basic statistics
-        stats = transform_result_df[['score', 'time_delta', 'd1_miss_delta', 'lld_miss_delta']].describe()
+        stats = transform_result_df[['score', 'time_delta', 'd1_miss_delta', 'lld_miss_delta']].describe().round(4) 
+        # Calculate sign counts
+        sign_counts = transform_result_df[['score', 'time_delta', 'd1_miss_delta', 'lld_miss_delta']].apply(
+            lambda col: pd.Series({
+                "positive_count": (col > 0).sum(),
+                "zero_count": (col == 0).sum(),
+                "negative_count": (col < 0).sum(),
+                "positive_percentage": round((col > 0).mean() * 100, 4),  # Round to 4 decimals
+                "zero_percentage": round((col == 0).mean() * 100, 4),      # Round to 4 decimals
+                "negative_percentage": round((col < 0).mean() * 100, 4),   # Round to 4 decimals
+            })
+        )
+
+
+        # Transpose `sign_counts` so it matches the structure of `stats`
+        # sign_counts = sign_counts.T
+        print(sign_counts) 
+        summary = pd.concat([stats, sign_counts]) 
+        summary.to_csv(self.config.experiment_dir.joinpath(f"transform_summary.csv")) 
         
+        grouper_names = groupers.get_all_grouper_names() 
+        
+        
+        ### Task 1: Overall Counts and Pie Chart
+        # Flatten all dictionaries into a single list of group numbers
+        all_groups = [group for row in transform_result_df["grouping_ids_dict"] for group in row.values()]
+        print(all_groups)
+        group_counts = Counter(all_groups)
+
+        # Convert counts to DataFrame for further analysis
+        group_stats_df = pd.DataFrame.from_dict(group_counts, orient='index', columns=['count'])
+        group_stats_df['percentage'] = (group_stats_df['count'] / group_stats_df['count'].sum()) * 100
+        group_stats_df = group_stats_df.sort_index()
+        print(group_stats_df)
+
+        # Generate consistent color mapping for groups
+        unique_group_indices = sorted(group_stats_df.index)
+        color_mapping = {group: plt.cm.tab20(i % 20) for i, group in enumerate(unique_group_indices)}
+
+        # Create labels with group index and name
+        group_labels = [f"{index} ({grouper_names[index]})" for index in group_stats_df.index]
+
+        # Plot Pie Chart with consistent color mapping
+        plt.figure(figsize=(8, 8))
+        plt.pie(group_stats_df['count'], labels=group_labels, autopct='%1.1f%%', startangle=140, colors=[color_mapping[group] for group in group_stats_df.index])
+        plt.title("Group Distribution Across All Records")
+        plt.tight_layout()
+        plt.savefig(output_dir.joinpath("grouping_percentages.png"))
+        plt.close()
+
+
+        ### Task 2: Per-row Group Counts and Stacked Bar Chart
+
+        # Calculate group counts for each row
+        row_group_counts = transform_result_df["grouping_ids_dict"].apply(lambda x: Counter(x.values()))
+
+        # Normalize the row counts into a DataFrame
+        row_group_df = pd.DataFrame(list(row_group_counts)).fillna(0).astype(int)
+
+        # Plot Stacked Bar Chart with consistent color mapping
+        ax = row_group_df.plot(kind='bar', stacked=True, figsize=(10, 6), color=[color_mapping[group] for group in row_group_df.columns])
+
+        # Set title and labels
+        plt.title("Group Number Composition for Each Benchmark")
+        plt.xlabel("File")
+        plt.ylabel("Count of Group Numbers")
+
+        # Set x-axis to use "file" field for labeling
+        plt.xticks(ticks=range(len(transform_result_df)), labels=transform_result_df["file"], rotation=90)
+
+        # Customize legend: sorted by group name, using the same color mapping
+        handles, labels = ax.get_legend_handles_labels()
+        sorted_labels = [f"Group {label}" for label in sorted(labels, key=int)]  # Sort the group names by their index
+        ax.legend(handles, sorted_labels, title="Group Numbers")
+
+        # Layout adjustments and saving the plot
+        plt.tight_layout()
+        plt.savefig(output_dir.joinpath("grouping_distribution.png"))
+        plt.close()
+
+
         # Print out the statistics (optional)
-        print("Statistics Summary:\n", stats)
+        print("Statistics Summary:\n", summary)  
         
         # Create bar charts for each column
         # Loop through each row in the dataframe
@@ -287,6 +369,8 @@ class Runner:
     def analyze_transform_result(self): 
         print("Analyzing transform result") 
         df = pd.read_csv(self.config.transform_result_path)  
+        # print(df.head()) 
+        df["grouping_ids_dict"] = df["grouping_ids_dict"].apply(lambda x: json.loads(x)) 
         self.analyze_and_generate_bar_charts(df, output_dir=self.config.experiment_dir)      
 
     def predict_and_transform_all(self, directory=".", build_dir=Path("build"), model_path=models.DEFAULT_MODEL_PATH): 
@@ -334,7 +418,9 @@ class Runner:
         with open( self.config.experiment_dir.joinpath(TRANSFORM_RESULT_FNAME), "w") as f: 
             json.dump(transform_result_dict, f, indent=4) 
 
-        transform_result_df.to_csv(f"test_{TRANSFORM_RESULT_CSV_FNAME}", index=False) 
+        processed_result_df = transform_result_df.copy() 
+        processed_result_df["grouping_ids_dict"] = processed_result_df["grouping_ids_dict"].apply(lambda x: json.dumps(x)) 
+        processed_result_df.to_csv(self.config.experiment_dir.joinpath(f"test_{TRANSFORM_RESULT_CSV_FNAME}"), index=False) 
         self.analyze_and_generate_bar_charts(transform_result_df, output_dir=self.config.experiment_dir)
 
     def transform_all(self):

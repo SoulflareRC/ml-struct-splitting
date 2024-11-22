@@ -13,6 +13,7 @@ from sklearn.preprocessing import LabelBinarizer
 from sklearn.preprocessing import label_binarize
 import groupers 
 import json 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 '''
 The core machine learning pipeline. 
 
@@ -140,38 +141,71 @@ class GroupingSelector:
         ''' 
         self.input_size = L+1 
         self.model = BestMatrixSelector(input_size=self.input_size, hidden_size=hidden_size, C=C, rnn_type=rnn_type)  
-    def train(self, ds_df:pd.DataFrame, epochs = 100): 
-        print("Training Matrix Selector model!!!") 
-        criterion = nn.CrossEntropyLoss() 
-        optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
-        for epoch in tqdm(range(epochs)): 
-            for idx, row in ds_df.iterrows():  
-                feature_grouping_matrices = row["feature_grouping_matrices"] 
-                target = row["target"] 
-                print(type(feature_grouping_matrices), type(target))
-                print(feature_grouping_matrices.shape)  
-                feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32)  
-                target = torch.tensor(target).long()  
-                # print(target) 
-                # print(feature_grouping_matrices) 
-                
-                # unsqueeze out the batch dimension 
-                target = target.unsqueeze(0) 
-                feature_grouping_matrices = feature_grouping_matrices.unsqueeze(0) 
-                # print(target.shape, feature_grouping_matrices.shape) 
+    def train(self, ds_df: pd.DataFrame, epochs=100, tolerance=1e-6, patience=10):
+            """
+            Train the model with early stopping.
+            
+            Args:
+            - ds_df (pd.DataFrame): Training dataset.
+            - epochs (int): Maximum number of epochs.
+            - tolerance (float): Minimum change in loss to consider improvement.
+            - patience (int): Number of epochs to wait for improvement before stopping.
+            """
 
-                output = self.model(feature_grouping_matrices) 
+            print(f"Device: {device}")
+            print("Training Matrix Selector model!!!")
+            
+            criterion = nn.CrossEntropyLoss().to(device)
+            optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
+            self.model = self.model.to(device)
+            
+            best_loss = float("inf")
+            patience_counter = 0
+            
+            for epoch in tqdm(range(epochs)):
+                epoch_loss = 0.0
+                for idx, row in ds_df.iterrows():
+                    feature_grouping_matrices = row["feature_grouping_matrices"]
+                    target = row["target"]
+                    
+                    feature_grouping_matrices = torch.tensor(feature_grouping_matrices, device=device, dtype=torch.float32)
+                    target = torch.tensor(target, device=device).long()
+                    
+                    # Unsqueeze to add batch dimension
+                    target = target.unsqueeze(0)
+                    feature_grouping_matrices = feature_grouping_matrices.unsqueeze(0)
+                    
+                    # Forward pass
+                    output = self.model(feature_grouping_matrices)
+                    loss = criterion(output, target)
+                    
+                    # Backward pass and optimization
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    
+                    # Accumulate loss for this epoch
+                    epoch_loss += loss.item()
                 
-                loss = criterion(output, target) 
+                # Calculate average loss for the epoch
+                epoch_loss /= len(ds_df)
                 
-                optimizer.zero_grad() 
-                loss.backward() 
-                optimizer.step() 
-                
+                # Print progress
                 if (epoch+1) % LOG_EPOCH_INTERVAL == 0: 
-                    print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item()}")
+                    print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss}")
+                
+                # Check for early stopping
+                if abs(best_loss - epoch_loss) < tolerance:
+                    patience_counter += 1
+                    if patience_counter >= patience:
+                        print("Early stopping triggered.")
+                        return 
+                else:
+                    best_loss = epoch_loss
+                    patience_counter = 0
     
     def test(self, ds_df: pd.DataFrame): 
+        print(f"Device: {device}")
         with torch.no_grad(): 
             all_preds = []
             all_targets = []
@@ -183,8 +217,8 @@ class GroupingSelector:
                 # Extract the target and feature grouping matrices from the row
                 target = row["target"] 
                 feature_grouping_matrices = row["feature_grouping_matrices"] 
-                target = torch.tensor(target).long().unsqueeze(0) 
-                feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32).unsqueeze(0)
+                target = torch.tensor(target, device=device).long().unsqueeze(0) 
+                feature_grouping_matrices = torch.tensor(feature_grouping_matrices, device=device, dtype=torch.float32).unsqueeze(0)
                 
                 # Forward pass through the model
                 output = self.model(feature_grouping_matrices) 
