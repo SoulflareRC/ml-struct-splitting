@@ -13,6 +13,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import logging 
 from config import Config 
+from datetime import datetime
+import ast 
+import time 
 # logging.basicConfig(level=logging.DEBUG) 
 logging.basicConfig(level=logging.INFO) 
 ANALYSIS_FNAME="field_loop_analysis.json"
@@ -36,11 +39,12 @@ class Runner:
         # Parse arguments and load configuration
         self.args = self._parse_args()
         self.config = self._initialize_config(self.args)
-        self._print_config()
-        suppress_output = not self.config.print_pass_output 
+        setattr(self.config, "experiment_dir", self.get_experiment_dir()) 
+        self._print_config()  
+        self.config.save_to_file(self.config.experiment_dir.joinpath(f"config.json")) 
         # self.analyzer = analyze.StructAnalyzer(source_file=self.config.source_file, build_dir=self.config.build_dir, suppress_pass_output=suppress_output) 
         self.analyzer = analyze.StructAnalyzer(config=self.config)  
-        self.selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
+        self.selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size, rnn_type=self.config.rnn_type)   
         
 
     def _parse_args(self):
@@ -63,12 +67,16 @@ class Runner:
         parser.add_argument("--analyze-transform-result", action="store_true", help="Takes a given transform result csv file and analyzes it and generates charts") 
         
         # config parameters 
+        parser.add_argument("--experiment-name", type=str, default=None, help="If specified, will use the this as the name of the experiment.") 
+        parser.add_argument("--analysis-df-path", type=str, default=None, help="The path to the CSV file containing the result of struct analysis. If this is specified then the training/prediction process will skip the analysis and just read from this file.")
+        parser.add_argument("--rnn-type", type=str, default="GRU", help="The type of RNN used by the model") 
+        parser.add_argument("--hidden-size", type=int, default=64, help="The hidden size of the model") 
         parser.add_argument("--transform-result-path", type=str, help="The transform result csv file", default="test_"+TRANSFORM_RESULT_CSV_FNAME)
         parser.add_argument("--grouping-idx", type=int, help="selected grouping index")
         parser.add_argument("--print-pass-output", action="store_true", help="un-suppress analysis and transform pass output")
-        parser.add_argument("--max-N", type=int, default=10, help="The (maximum) number of groups each struct will be divided into")
+        parser.add_argument("--max-N", type=int, default=3, help="The (maximum) number of groups each struct will be divided into")
         parser.add_argument("--profile-avg-cnt", type=int, help="Number of iterations to run when profiling runtime and cache misses", default=10)  
-        parser.add_argument("--train-epochs", type=int, help="Number epochs to train the model on the training data", default=100)
+        parser.add_argument("--train-epochs", type=int, help="Number epochs to train the model on the training data", default=1000)
         parser.add_argument("--model-path", type=str, help="Path to the saved model pth file", default="model.pth")
         parser.add_argument("--source-file", type=str, help="The C source file without extension", default="programs/test_programs/test.c")
         parser.add_argument("--benchmark-dir", type=str, help="Directory for benchmark folder", default="programs/test_programs")
@@ -89,6 +97,46 @@ class Runner:
         """ Print out the configuration details """
         print("Configuration Loaded:")
         print(self.config)
+    
+    def get_experiment_dir(self, unnamed=False) -> Path: 
+        '''
+        This function will create a folder under experiment base path (with parents=True) and return the Path to it. 
+        If unnamed is True, then the folder's name is the current timestamp using YYYY-MM-DD-HH-MM-SS. 
+        Otherwise, this will compose the folder's name using self.config's attributes including: 
+        - hidden_size (int) 
+        - rnn_type (str) 
+        - max_N (int)
+        - profile_avg_cnt (int) 
+        - train_epochs (int) 
+        '''
+        # Base directory for experiments
+        experiment_base_path = Path("experiments")
+        
+        # Determine folder name
+        if unnamed:
+            # Use current timestamp for folder name
+            folder_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        else:
+            if self.config.experiment_name is not None: 
+                folder_name = self.config.experiment_name
+            else: 
+                # Compose folder name using config attributes
+                folder_name = (
+                    f"hidden_size-{self.config.hidden_size}_"
+                    f"rnn_type-{self.config.rnn_type}_"
+                    f"max_N-{self.config.max_N}_"
+                    f"profile_avg_cnt-{self.config.profile_avg_cnt}_"
+                    f"train_epochs-{self.config.train_epochs}"
+                )
+        
+        # Create the full path
+        experiment_dir = experiment_base_path / folder_name
+        
+        # Create the directory with parents=True
+        experiment_dir.mkdir(parents=True, exist_ok=True)
+        
+        return experiment_dir
+        
 
     def cleanup_files(self): 
         print("Cleaning up files")
@@ -107,7 +155,6 @@ class Runner:
         print(f"Run grouping method on all structs of source file {self.config.source_file}")
         print("grouping idx:", grouping_idx)
         self.analyzer.run_grouping(grouping_idx)
-
 
     def get_source_files(self, directory="."): 
         folder = Path(directory) 
@@ -142,27 +189,45 @@ class Runner:
                 # print("df_sub: \n", df_sub) 
                 # print("df: \n", df) 
                 # print("ds_df: \n", ds_df) 
-            
-        df.to_csv(f"all_struct_df.csv", index=False) 
-        ds_df.to_csv(f"all_struct_ds_df.csv", index=False) 
         return df, ds_df 
 
     def train_selector(self, ds_df:pd.DataFrame, epochs=100):  
         # train_df, test_df = train_test_split(ds_df, test_size=0.2) 
-        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
+        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size)  
         # selector_model.train(ds_df=train_df, epochs=100) 
         # selector_model.test(ds_df=test_df)  
         # print("ds df: \n", ds_df) 
         selector_model.train(ds_df=ds_df, epochs=epochs) 
         selector_model.test(ds_df=ds_df)  
         selector_model.evaluate(ds_df=ds_df)
-        selector_model.save_model(self.config.model_path)  
+        # selector_model.save_model( self.config.experiment_dir.joinpath(self.config.model_path)) 
+        selector_model.save_model( self.config.experiment_dir.joinpath(f"model.pth"))  
 
+    def get_all_benchmark_ds_df(self): 
+        if self.config.analysis_df_path is not None: 
+            print(f"Reading all benchmark analysis from {self.config.analysis_df_path}") 
+            ds_df = pd.read_csv(self.config.analysis_df_path, dtype={"feature_grouping_matrices":str, "target": int}) 
+            ds_df['feature_grouping_matrices'] = ds_df['feature_grouping_matrices'].apply(
+                lambda x : np.array(json.loads(str(x))) 
+            )
+        else: 
+            _, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
+        print("Column Types:")
+        print(ds_df.dtypes)
+        
+        processed_ds_df = ds_df.copy() # make a copy and save this to csv  
+        processed_ds_df["feature_grouping_matrices"] = processed_ds_df["feature_grouping_matrices"].apply(
+            lambda x: json.dumps(x.tolist()) 
+        ) 
+        processed_ds_df.to_csv( self.config.experiment_dir.joinpath(f"{Path(self.config.benchmark_dir).name}_ds_df.csv"), index=False) 
+        print(processed_ds_df.head()) 
+        
+        return ds_df 
+        
     def analyze_all(self):
         print("Analyzing all benchmarks and training model") 
-        df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
-        self.train_selector(ds_df=ds_df, epochs=self.config.train_epochs)
-    
+        ds_df = self.get_all_benchmark_ds_df() 
+        self.train_selector(ds_df=ds_df, epochs=self.config.train_epochs) 
         
     def analyze_and_generate_bar_charts(self, transform_result_df: pd.DataFrame, output_dir: Path = Path(".")):
         """
@@ -222,7 +287,7 @@ class Runner:
     def analyze_transform_result(self): 
         print("Analyzing transform result") 
         df = pd.read_csv(self.config.transform_result_path)  
-        self.analyze_and_generate_bar_charts(df)     
+        self.analyze_and_generate_bar_charts(df, output_dir=self.config.experiment_dir)      
 
     def predict_and_transform_all(self, directory=".", build_dir=Path("build"), model_path=models.DEFAULT_MODEL_PATH): 
         folder = Path(directory) 
@@ -266,18 +331,19 @@ class Runner:
         positive_rate = positive_cnt / total_cnt 
         print("final transform result: \n", json.dumps(transform_result_dict, indent=4)) 
         print(f"Total cnt: {total_cnt} Positive cnt: {positive_cnt} Positive rate: {positive_rate}")
-        with open(TRANSFORM_RESULT_FNAME, "w") as f: 
+        with open( self.config.experiment_dir.joinpath(TRANSFORM_RESULT_FNAME), "w") as f: 
             json.dump(transform_result_dict, f, indent=4) 
 
         transform_result_df.to_csv(f"test_{TRANSFORM_RESULT_CSV_FNAME}", index=False) 
-        self.analyze_and_generate_bar_charts(transform_result_df)
+        self.analyze_and_generate_bar_charts(transform_result_df, output_dir=self.config.experiment_dir)
 
     def transform_all(self):
         self.predict_and_transform_all(directory=self.config.benchmark_dir, build_dir=self.config.build_dir, model_path=self.config.model_path)
 
     def analyze_and_transform_all(self):
         print("Analyze and transform all")
-        df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
+        # df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
+        ds_df = self.get_all_benchmark_ds_df() 
         self.train_selector(ds_df=ds_df, epochs=self.config.train_epochs)
         self.predict_and_transform_all(directory=self.config.benchmark_dir, build_dir=self.config.build_dir, model_path=self.config.model_path)
 
@@ -302,7 +368,7 @@ class Runner:
         
         for f in tqdm(files): 
             print(f"Running sanity check for {str(f)}")
-            analyzer = analyze.StructAnalyzer(source_file=f, build_dir=build_dir)
+            analyzer = analyze.StructAnalyzer(config=self.config) 
             analyzer.run_setup() 
             analyzer.load_analysis_file()
             analyzer.sanity_check()
@@ -312,16 +378,18 @@ class Runner:
         self._sanity_check_all(self.config.benchmark_dir, self.config.build_dir)
     
     def _evaluate_model(self, ds_df:pd.DataFrame, model_path:Path=Path(models.DEFAULT_MODEL_PATH)): 
-        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
+        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size)  
         selector_model.load_model(model_path) 
         selector_model.evaluate(ds_df) 
     
     def evaluate_model(self): 
         print(f"Evaluating model on all benchmarks") 
-        df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
+        # df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
+        ds_df = self.get_all_benchmark_ds_df() 
         self._evaluate_model(ds_df, self.config.model_path) 
 
     def run(self):
+        start = time.time() 
         if self.config.cleanup_files:
             self.cleanup_files() 
         
@@ -357,4 +425,5 @@ class Runner:
 
         if self.config.analyze_transform_result: 
             self.analyze_transform_result() 
-
+        duration = time.time() - start 
+        print(f"Run took {duration} seconds!") 

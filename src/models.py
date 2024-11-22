@@ -1,3 +1,4 @@
+from pathlib import Path 
 import numpy as np 
 import torch 
 import torch.nn as nn 
@@ -11,6 +12,7 @@ from sklearn.metrics import roc_curve, auc
 from sklearn.preprocessing import LabelBinarizer
 from sklearn.preprocessing import label_binarize
 import groupers 
+import json 
 '''
 The core machine learning pipeline. 
 
@@ -30,34 +32,86 @@ DEFAULT_HIDDEN_SIZE = 64
 LOG_EPOCH_INTERVAL = 10 
 DEFAULT_MODEL_PATH = "model.pth" 
 
-# Define a model to process each matrix of size F x (L+1)
+# # Define a model to process each matrix of size F x (L+1)
+# class MatrixEncoder(nn.Module):
+#     def __init__(self, input_size, hidden_size, rnn_type="GRU"):
+#         super(MatrixEncoder, self).__init__()
+#         # You can use LSTM, GRU, or even Transformer layers
+#         self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size, num_layers=1, batch_first=True)
+#         # (B, seqlen, input) --> 
+#         # output: (B, seqlen, input) 
+#         # hidden: (num layers, B, hidden)
+#         self.fc = nn.Linear(hidden_size, hidden_size)  # Final encoding layer
+#         # will be (*, input) --> (*, hidden)
+
+#     def forward(self, x):
+#         # print("Encoder input: ", x.shape) 
+#         # x shape will be (B, C, F, L+1), need to reshape to (B*C, F, L+1) for separate processing 
+#         x = x.view(-1, x.shape[2], x.shape[3]) 
+#         # print("Reshaped x: ", x.shape) 
+        
+#         # x: (batch_size, F, L+1), batch of matrices
+#         _, h_n = self.rnn(x)  # h_n will be of shape (1, batch_size, hidden_size)
+#         return self.fc(h_n.squeeze(0))  # Output a fixed-size encoding
+#         # output size: [B, hidden] 
+
+
+
 class MatrixEncoder(nn.Module):
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size, hidden_size, rnn_type="GRU"):
+        """
+        A flexible encoder that supports GRU, LSTM, or RNN.
+        
+        Args:
+        - input_size (int): Input feature size.
+        - hidden_size (int): Hidden state size of the RNN.
+        - rnn_type (str): Type of RNN to use ('GRU', 'LSTM', or 'RNN').
+        """
         super(MatrixEncoder, self).__init__()
-        # You can use LSTM, GRU, or even Transformer layers
-        self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size, num_layers=1, batch_first=True)
-        # (B, seqlen, input) --> 
-        # output: (B, seqlen, input) 
-        # hidden: (num layers, B, hidden)
-        self.fc = nn.Linear(hidden_size, hidden_size)  # Final encoding layer
-        # will be (*, input) --> (*, hidden)
+        
+        # Select the appropriate RNN type
+        rnn_mapping = {
+            "GRU": nn.GRU,
+            "LSTM": nn.LSTM,
+            "RNN": nn.RNN
+        }
+        if rnn_type not in rnn_mapping:
+            raise ValueError(f"Invalid rnn_type: {rnn_type}. Choose from 'GRU', 'LSTM', or 'RNN'.")
+        
+        self.rnn_type = rnn_type
+        self.rnn = rnn_mapping[rnn_type](input_size=input_size, hidden_size=hidden_size, 
+                                          num_layers=1, batch_first=True)
+        print("Encoder RNN: ", self.rnn) 
+        # Fully connected layer to project hidden state to encoding
+        self.fc = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, x):
-        # print("Encoder input: ", x.shape) 
-        # x shape will be (B, C, F, L+1), need to reshape to (B*C, F, L+1) for separate processing 
-        x = x.view(-1, x.shape[2], x.shape[3]) 
-        # print("Reshaped x: ", x.shape) 
+        """
+        Forward pass of the encoder.
         
-        # x: (batch_size, F, L+1), batch of matrices
-        _, h_n = self.rnn(x)  # h_n will be of shape (1, batch_size, hidden_size)
-        return self.fc(h_n.squeeze(0))  # Output a fixed-size encoding
-        # output size: [B, hidden] 
+        Args:
+        - x (torch.Tensor): Input tensor of shape (B, C, F, L+1).
+        
+        Returns:
+        - torch.Tensor: Encoded output of shape (B, hidden_size).
+        """
+        # Reshape input to (B*C, F, L+1) for processing
+        x = x.view(-1, x.shape[2], x.shape[3])
+        
+        # Pass through the RNN
+        if self.rnn_type == "LSTM":
+            _, (h_n, _) = self.rnn(x)  # For LSTM, h_n is returned along with c_n
+        else:
+            _, h_n = self.rnn(x)  # For GRU or RNN, only h_n is returned
+        
+        # Project the hidden state to a fixed-size encoding
+        return self.fc(h_n.squeeze(0))
    
    # Define a model that combines the C matrix encodings and predicts the best matrix
 class BestMatrixSelector(nn.Module):
-    def __init__(self, input_size, hidden_size, C):
+    def __init__(self, input_size, hidden_size, C, rnn_type):
         super(BestMatrixSelector, self).__init__()
-        self.encoder = MatrixEncoder(input_size, hidden_size)  # To encode each matrix
+        self.encoder = MatrixEncoder(input_size, hidden_size, rnn_type)  # To encode each matrix
         self.fc = nn.Linear(C * hidden_size, C)  # Classifier to select the best matrix
 
     def forward(self, matrices):
@@ -79,13 +133,13 @@ class BestMatrixSelector(nn.Module):
         return self.fc(encoded)
 
 class GroupingSelector: 
-    def __init__(self, C, L = HOTNESS_LOOP_CNT, hidden_size = DEFAULT_HIDDEN_SIZE):
+    def __init__(self, C, L = HOTNESS_LOOP_CNT, hidden_size = DEFAULT_HIDDEN_SIZE, rnn_type="GRU"):
         ''' 
         C: number of grouping methods 
         L: L hottest loops 
         ''' 
         self.input_size = L+1 
-        self.model = BestMatrixSelector(input_size=self.input_size, hidden_size=hidden_size, C=C) 
+        self.model = BestMatrixSelector(input_size=self.input_size, hidden_size=hidden_size, C=C, rnn_type=rnn_type)  
     def train(self, ds_df:pd.DataFrame, epochs = 100): 
         print("Training Matrix Selector model!!!") 
         criterion = nn.CrossEntropyLoss() 
@@ -94,7 +148,8 @@ class GroupingSelector:
             for idx, row in ds_df.iterrows():  
                 feature_grouping_matrices = row["feature_grouping_matrices"] 
                 target = row["target"] 
-                # print(idx, type(time_deltas), type(feature_grouping_matrices), type(target)) 
+                print(type(feature_grouping_matrices), type(target))
+                print(feature_grouping_matrices.shape)  
                 feature_grouping_matrices = torch.tensor(feature_grouping_matrices, dtype=torch.float32)  
                 target = torch.tensor(target).long()  
                 # print(target) 
@@ -161,7 +216,7 @@ class GroupingSelector:
             # Return the predictions, targets, and probabilities
             return np.array(all_preds), np.array(all_targets), all_probs
 
-    def get_conf_matrix(self, preds, targets): 
+    def get_conf_matrix(self, preds, targets, output_dir:Path): 
         cm = confusion_matrix(targets, preds)  
         fig, ax = plt.subplots() 
         cax = ax.matshow(cm, cmap=plt.cm.Blues, interpolation="nearest") 
@@ -179,10 +234,10 @@ class GroupingSelector:
         ax.set_xlabel("Predictions") 
         ax.xaxis.set_label_position("top") 
         ax.set_ylabel("True Labels") 
-        plt.savefig("confusion_matrix.png")  
+        plt.savefig( output_dir.joinpath("confusion_matrix.png"))  
         plt.close() 
 
-    def plot_roc_curve(self, preds, targets, output_file='roc_curve.png'):
+    def plot_roc_curve(self, preds, targets, output_dir:Path):
         # Binarize the targets for multi-class ROC curve
         lb = LabelBinarizer()
         targets_bin = lb.fit_transform(targets)  # Convert to binary labels (one-hot encoding)
@@ -220,15 +275,17 @@ class GroupingSelector:
         plt.legend(loc='lower right')
 
         # Save the figure to a file
+        output_file = output_dir.joinpath("roc_curve.png")
         plt.savefig(output_file)
-        print(f"ROC curve saved as {output_file}")
+        print(f"ROC curve saved as {str(output_file)}")
         plt.close()  # Close the plot to release resources
 
         # Calculate and print the overall AUC (macro average)
         overall_auc = np.mean(list(roc_auc.values()))
         print(f"Overall Macro Average AUC: {overall_auc:.2f}")
+        return overall_auc 
 
-    def evaluate(self, ds_df: pd.DataFrame, output_image_path: str = "confusion_matrix.png"):
+    def evaluate(self, ds_df: pd.DataFrame, output_dir:Path=Path(".")):
         # Get predictions and targets
         preds, targets, probs = self.test(ds_df)
         print(f"preds: {preds} \n targets: {targets} \n probs: {probs}")
@@ -244,9 +301,29 @@ class GroupingSelector:
         print(f"Recall: {recall:.4f}")
         print(f"F1 Score: {f1:.4f}")
         
-        self.get_conf_matrix(preds=preds, targets=targets) 
+        self.get_conf_matrix(preds=preds, targets=targets, output_dir=output_dir) 
 
-        self.plot_roc_curve(preds=probs, targets=targets) 
+        overall_auc = self.plot_roc_curve(preds=probs, targets=targets, output_dir=output_dir) 
+
+        
+        # Create a dictionary for metrics
+        metrics = {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1, 
+            "overall_auc": overall_auc,
+        }
+
+        # Save metrics to a JSON file
+        metrics_file_path = output_dir / "evaluation_metrics.json"
+        try:
+            with metrics_file_path.open("w", encoding="utf-8") as file:
+                json.dump(metrics, file, indent=4)
+            print(f"Metrics saved to {metrics_file_path}")
+        except Exception as e:
+            print(f"Failed to save metrics to JSON: {e}")
+        
 
     def model_output_to_probs(self, ds_df: pd.DataFrame):
         """Convert model outputs to probabilities (for ROC and AUC)"""

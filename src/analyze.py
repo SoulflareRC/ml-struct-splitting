@@ -61,18 +61,20 @@ class StructAnalyzer:
         this is used to quickly verify if a program still works after transformation 
         this uses random grouper 
         '''    
-        grouping_dict = {} 
-        self.load_analysis_file(ANALYSIS_FNAME) 
-        for key in self.analysis_dict.keys(): 
-            matrix = self.analysis_dict[key] 
-            selected_grouping_idx = 1  
-            selected_grouping = self.generate_grouping(matrix, selected_grouping_idx)  
-            logging.debug(f"Struct name: {key} grouping: {selected_grouping}") 
-            grouping_dict[key] = selected_grouping.tolist()  
-        with open(GROUPING_FNAME, "w") as f :
-            json.dump(grouping_dict, f, indent=4) 
-        self.run_transform() 
-        self.llvm_helper.emit_ll_ir() 
+        for i in tqdm(range(10)): 
+            # run sanity check 10 times to make sure not influenced by randomness 
+            grouping_dict = {} 
+            self.load_analysis_file(ANALYSIS_FNAME) 
+            for key in self.analysis_dict.keys(): 
+                matrix = self.analysis_dict[key] 
+                selected_grouping_idx = 1  
+                selected_grouping = self.generate_grouping(matrix, selected_grouping_idx)  
+                logging.debug(f"Struct name: {key} grouping: {selected_grouping}") 
+                grouping_dict[key] = selected_grouping.tolist()  
+            with open(GROUPING_FNAME, "w") as f :
+                json.dump(grouping_dict, f, indent=4) 
+            self.run_transform() 
+            self.llvm_helper.emit_ll_ir() 
         print("Sanity check passed!!!") 
          
         

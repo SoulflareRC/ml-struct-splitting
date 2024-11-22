@@ -1,5 +1,6 @@
 clean: 
 	rm -rf build 
+	python3 src/main.py --cleanup-files 
 
 build:
 	mkdir -p build

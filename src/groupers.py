@@ -34,8 +34,10 @@ class RandomGrouper(Grouper):
     def assign_groups(self, data: np.ndarray) -> np.ndarray:
         """Assign each row of data to a random group."""
         print("data shape: ", data.shape) 
-        n = data.shape[0]  # number of rows
-        groups = np.random.randint(0, self.max_N, size=n)  # generate random group numbers
+        n_datapoints = data.shape[0]  # number of rows
+        n_clusters = self.max_N if self.max_N < n_datapoints else n_datapoints 
+        # if # data points is smaller than max_N, then must limit to # data points 
+        groups = np.random.randint(0, n_clusters, size=n_datapoints)  # generate random group numbers
         return groups.reshape(1, -1)  
         #     # Step 2: Find unique group numbers in the order they appear
         # unique_groups, remapped_groups = np.unique(groups, return_inverse=True)
