@@ -2,11 +2,9 @@
 This file contains LLVM helpers. 
 Basically this extracts all run.sh content and converted them into python code. 
 '''
-import os
 import subprocess
 import argparse
 from pathlib import Path 
-import json 
 import logging 
 # ACTION NEEDED: Update the paths if necessary
 # BUILD_DIR = "/mnt/o/Jul28Backup/UofM-Programs/eecs583/ml-struct-splitting/build"

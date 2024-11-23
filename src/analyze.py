@@ -2,19 +2,18 @@ import pandas as pd
 import numpy as np 
 import json 
 import groupers 
-import argparse 
 import time 
 import subprocess
 from llvm_helpers import LLVMHelper
 import llvm_helpers 
 from pathlib import Path
-from tqdm import tqdm 
+from tqdm import tqdm
 import models 
-from sklearn.model_selection import train_test_split 
 import logging 
-from config import Config 
+from config import Config  
+
 # logging.basicConfig(level=logging.DEBUG) 
-logging.basicConfig(level=logging.INFO) 
+# logging.basicConfig(level=logging.INFO) 
 ANALYSIS_FNAME="field_loop_analysis.json"
 GROUPING_FNAME="groupings.json"  
 TRANSFORM_RESULT_FNAME="transform_result.json" 
@@ -29,10 +28,10 @@ STRUCT_DATASET_CSV_FNAME = "_dataset_grouping_result.csv"
 columns = ['struct_name', 'grouping_idx', 'feature_matrix', 'grouping_vector', 'time_delta', "d1_miss_delta", "lld_miss_delta", "score"]
 dataset_columns = ["feature_grouping_matrices", "target"] 
 # Set pandas options to display the full DataFrame
-pd.set_option('display.max_rows', None)  # No limit on the number of rows
-pd.set_option('display.max_columns', None)  # No limit on the number of columns
-pd.set_option('display.width', None)  # No limit on the width of the display
-pd.set_option('display.max_colwidth', None)  # No limit on column width
+# pd.set_option('display.max_rows', None)  # No limit on the number of rows
+# pd.set_option('display.max_columns', None)  # No limit on the number of columns
+# pd.set_option('display.width', None)  # No limit on the width of the display
+# pd.set_option('display.max_colwidth', None)  # No limit on column width
 class StructAnalyzer: 
     # def __init__(self, source_file,build_dir:Path, max_N=DEFAULT_MAX_N, suppress_pass_output=True,  fname=ANALYSIS_FNAME): 
     def __init__(self, config:Config):
@@ -61,8 +60,8 @@ class StructAnalyzer:
         this is used to quickly verify if a program still works after transformation 
         this uses random grouper 
         '''    
-        for i in tqdm(range(10)): 
-            # run sanity check 10 times to make sure not influenced by randomness 
+        for i in tqdm(range(self.config.sanity_check_N)): 
+            # run sanity check 5 times to make sure not influenced by randomness 
             grouping_dict = {} 
             self.load_analysis_file(ANALYSIS_FNAME) 
             for key in self.analysis_dict.keys(): 
@@ -282,6 +281,7 @@ class StructAnalyzer:
             logging.debug(f"feature grouping matrix: \n", feature_grouping_matrix) 
             
             # time_deltas[gidx] = avg_time_delta 
+            scores[1:] -= 0.001 # other grouping methods must prove that they are at least 0.1% better than no splitting. 
             scores[gidx] = score
             feature_grouping_matrices[gidx] = feature_grouping_matrix 
                  
@@ -392,105 +392,107 @@ class StructAnalyzer:
         print(f"analysis dict: \n", json.dumps(analysis_dict, indent=4)) 
         print(f"grouping dict: \n", json.dumps(grouping_dict, indent=4))  
         print(f"grouping: {grouping_idx} score: {score}, avg_time_delta: {avg_time_delta},avg_d1_miss_delta: {avg_d1_miss_delta}, avg_lld_miss_delta: {avg_lld_miss_delta} ") 
-def get_source_files(directory="."): 
-    folder = Path(directory) 
-    files = list(folder.iterdir()) 
-    files = [f for f in files if f.is_file() and f.suffix==".c"] 
-    print(files) 
-    return files 
+
+
+# def get_source_files(directory="."): 
+#     folder = Path(directory) 
+#     files = list(folder.iterdir()) 
+#     files = [f for f in files if f.is_file() and f.suffix==".c"] 
+#     print(files) 
+#     return files 
     
-def analyze_all_benchmarks(directory=".", build_dir=Path("build")): 
-    folder = Path(directory) 
-    print(f"Analyzing all benchmarks under folder {folder}")
-    df = pd.DataFrame(columns=columns)
-    ds_df = pd.DataFrame(columns=dataset_columns) 
+# def analyze_all_benchmarks(directory=".", build_dir=Path("build")): 
+#     folder = Path(directory) 
+#     print(f"Analyzing all benchmarks under folder {folder}")
+#     df = pd.DataFrame(columns=columns)
+#     ds_df = pd.DataFrame(columns=dataset_columns) 
     
-    files = get_source_files(folder) 
+#     files = get_source_files(folder) 
     
-    for f in tqdm(files): 
-        print(f) 
-        if f.is_file() and f.suffix == ".c":
-            print(f"Analyzing benchmark: {f.name}")
-            analyzer = StructAnalyzer(source_file=f, build_dir=build_dir) 
-            analyzer.run_setup() 
-            logging.debug("Setup completed!!!") 
-            analyzer.load_analysis_file()
-            df_sub, ds_df_sub = analyzer.search_all_structs()
-            analyzer.llvm_helper.cleanup_files() # cleanup files     
-            logging.debug("df_sub: \n") 
-            logging.debug(df_sub) 
-            df = pd.concat([df, df_sub]) 
-            ds_df = pd.concat([ds_df, ds_df_sub]) 
-            # print("df_sub: \n", df_sub) 
-            # print("df: \n", df) 
-            # print("ds_df: \n", ds_df) 
+#     for f in tqdm(files): 
+#         print(f) 
+#         if f.is_file() and f.suffix == ".c":
+#             print(f"Analyzing benchmark: {f.name}")
+#             analyzer = StructAnalyzer(source_file=f, build_dir=build_dir) 
+#             analyzer.run_setup() 
+#             logging.debug("Setup completed!!!") 
+#             analyzer.load_analysis_file()
+#             df_sub, ds_df_sub = analyzer.search_all_structs()
+#             analyzer.llvm_helper.cleanup_files() # cleanup files     
+#             logging.debug("df_sub: \n") 
+#             logging.debug(df_sub) 
+#             df = pd.concat([df, df_sub]) 
+#             ds_df = pd.concat([ds_df, ds_df_sub]) 
+#             # print("df_sub: \n", df_sub) 
+#             # print("df: \n", df) 
+#             # print("ds_df: \n", ds_df) 
             
-    df.to_csv(f"all_struct_df.csv", index=False) 
-    ds_df.to_csv(f"all_struct_ds_df.csv", index=False) 
-    return df, ds_df 
+#     df.to_csv(f"all_struct_df.csv", index=False) 
+#     ds_df.to_csv(f"all_struct_ds_df.csv", index=False) 
+#     return df, ds_df 
 
-def train_selector(ds_df:pd.DataFrame, epochs=100): 
-    # train_df, test_df = train_test_split(ds_df, test_size=0.2) 
-    selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
-    # selector_model.train(ds_df=train_df, epochs=100) 
-    # selector_model.test(ds_df=test_df)  
-    # print("ds df: \n", ds_df) 
-    selector_model.train(ds_df=ds_df, epochs=epochs) 
-    selector_model.test(ds_df=ds_df)  
-    selector_model.save_model() 
+# def train_selector(ds_df:pd.DataFrame, epochs=100): 
+#     # train_df, test_df = train_test_split(ds_df, test_size=0.2) 
+#     selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
+#     # selector_model.train(ds_df=train_df, epochs=100) 
+#     # selector_model.test(ds_df=test_df)  
+#     # print("ds df: \n", ds_df) 
+#     selector_model.train(ds_df=ds_df, epochs=epochs) 
+#     selector_model.test(ds_df=ds_df)  
+#     selector_model.save_model() 
 
-def evaluate_selector(ds_df:pd.DataFrame, model_path:Path=Path(models.DEFAULT_MODEL_PATH)): 
-    selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
-    selector_model.load_model(model_path) 
-    selector_model.evaluate(ds_df) 
+# def evaluate_selector(ds_df:pd.DataFrame, model_path:Path=Path(models.DEFAULT_MODEL_PATH)): 
+#     selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
+#     selector_model.load_model(model_path) 
+#     selector_model.evaluate(ds_df) 
 
-def predict_and_transform_all(directory=".", build_dir=Path("build"), model_path=models.DEFAULT_MODEL_PATH): 
-    folder = Path(directory) 
-    print(f"Transforming all benchmarks under folder {folder}")
-    transform_result_dict = {} 
-    total_cnt = 0 
-    positive_cnt = 0
+# def predict_and_transform_all(directory=".", build_dir=Path("build"), model_path=models.DEFAULT_MODEL_PATH): 
+#     folder = Path(directory) 
+#     print(f"Transforming all benchmarks under folder {folder}")
+#     transform_result_dict = {} 
+#     total_cnt = 0 
+#     positive_cnt = 0
     
-    files = get_source_files(folder) 
+#     files = get_source_files(folder) 
     
-    for f in tqdm(files): 
-        print(f) 
-        if f.is_file() and f.suffix == ".c":
-            print(f"Transforming benchmark: {f.name}")
-            analyzer = StructAnalyzer(source_file=f, build_dir=build_dir) 
-            analyzer.run_setup() 
-            print("Setup completed!!!") 
-            analyzer.load_analysis_file()
-            # _, grouping_ids_dict, time_delta =  analyzer.make_prediction(model_path=model_path) 
-            _, grouping_ids_dict, score, avg_time_delta, avg_d1_miss_delta, avg_lld_miss_delta = analyzer.make_prediction(model_path=model_path)
-            analyzer.llvm_helper.cleanup_files() # cleanup files     
-            transform_result_dict[f.name] ={
-                "grouping_ids_dict": grouping_ids_dict, 
-                "score" : score, 
-                "time_delta" : avg_time_delta, 
-                "d1_miss_delta": avg_d1_miss_delta, 
-                "lld_miss_delta" : avg_lld_miss_delta 
-            }
-            total_cnt += 1 
-            if score > 0: 
-                positive_cnt+=1 
-    positive_rate = positive_cnt / total_cnt 
-    print("final transform result: \n", json.dumps(transform_result_dict, indent=4)) 
-    print(f"Total cnt: {total_cnt} Positive cnt: {positive_cnt} Positive rate: {positive_rate}")
-    with open(TRANSFORM_RESULT_FNAME, "w") as f: 
-        json.dump(transform_result_dict, f, indent=4) 
+#     for f in tqdm(files): 
+#         print(f) 
+#         if f.is_file() and f.suffix == ".c":
+#             print(f"Transforming benchmark: {f.name}")
+#             analyzer = StructAnalyzer(source_file=f, build_dir=build_dir) 
+#             analyzer.run_setup() 
+#             print("Setup completed!!!") 
+#             analyzer.load_analysis_file()
+#             # _, grouping_ids_dict, time_delta =  analyzer.make_prediction(model_path=model_path) 
+#             _, grouping_ids_dict, score, avg_time_delta, avg_d1_miss_delta, avg_lld_miss_delta = analyzer.make_prediction(model_path=model_path)
+#             analyzer.llvm_helper.cleanup_files() # cleanup files     
+#             transform_result_dict[f.name] ={
+#                 "grouping_ids_dict": grouping_ids_dict, 
+#                 "score" : score, 
+#                 "time_delta" : avg_time_delta, 
+#                 "d1_miss_delta": avg_d1_miss_delta, 
+#                 "lld_miss_delta" : avg_lld_miss_delta 
+#             }
+#             total_cnt += 1 
+#             if score > 0: 
+#                 positive_cnt+=1 
+#     positive_rate = positive_cnt / total_cnt 
+#     print("final transform result: \n", json.dumps(transform_result_dict, indent=4)) 
+#     print(f"Total cnt: {total_cnt} Positive cnt: {positive_cnt} Positive rate: {positive_rate}")
+#     with open(TRANSFORM_RESULT_FNAME, "w") as f: 
+#         json.dump(transform_result_dict, f, indent=4) 
 
-def sanity_check_all(directory=".", build_dir=Path("build")): 
-    folder = Path(directory)
-    print(f"Running sanity check for all source files under folder: {str(folder)}")  
-    files = get_source_files(folder) 
+# def sanity_check_all(directory=".", build_dir=Path("build")): 
+#     folder = Path(directory)
+#     print(f"Running sanity check for all source files under folder: {str(folder)}")  
+#     files = get_source_files(folder) 
     
-    for f in tqdm(files): 
-        print(f"Running sanity check for {str(f)}")
-        analyzer = StructAnalyzer(source_file=f, build_dir=build_dir)
-        analyzer.run_setup() 
-        analyzer.load_analysis_file()
-        analyzer.sanity_check()
+#     for f in tqdm(files): 
+#         print(f"Running sanity check for {str(f)}")
+#         analyzer = StructAnalyzer(source_file=f, build_dir=build_dir)
+#         analyzer.run_setup() 
+#         analyzer.load_analysis_file()
+#         analyzer.sanity_check()
 
 
 # deprecated 

@@ -5,16 +5,12 @@ import analyze
 import models  
 import groupers
 import numpy as np 
-import torch 
-import torch.nn as nn 
-import torch.optim as optim
 from tqdm import tqdm  
 import pandas as pd 
 import matplotlib.pyplot as plt
 import logging 
 from config import Config 
 from datetime import datetime
-import ast 
 import time 
 from sklearn.model_selection import train_test_split 
 from collections import Counter 
@@ -30,20 +26,23 @@ TRANSFORM_RESULT_CSV_FNAME="_transform_result.csv"
 columns = ['struct_name', 'grouping_idx', 'feature_matrix', 'grouping_vector', 'time_delta', "d1_miss_delta", "lld_miss_delta", "score"]
 dataset_columns = ["feature_grouping_matrices", "target"] 
 # Set pandas options to display the full DataFrame
-pd.set_option('display.max_rows', None)  # No limit on the number of rows
-pd.set_option('display.max_columns', None)  # No limit on the number of columns
-pd.set_option('display.width', None)  # No limit on the width of the display
-pd.set_option('display.max_colwidth', None)  # No limit on column width
-
+# pd.set_option('display.max_rows', None)  # No limit on the number of rows
+# pd.set_option('display.max_columns', None)  # No limit on the number of columns
+# pd.set_option('display.width', None)  # No limit on the width of the display
+# pd.set_option('display.max_colwidth', None)  # No limit on column width
 
 class Runner:
     def __init__(self):
         # Parse arguments and load configuration
+        print("Init") 
         self.args = self._parse_args()
+        print("Args parsed") 
         self.config = self._initialize_config(self.args)
+        print("Config initialized") 
         setattr(self.config, "experiment_dir", self.get_experiment_dir()) 
         self._print_config()  
-        self.config.save_to_file(self.config.experiment_dir.joinpath(f"config.json")) 
+        self.config.save_to_file(self.config.experiment_dir.joinpath(f"config.json"))
+        print("Config saved")  
         # self.analyzer = analyze.StructAnalyzer(source_file=self.config.source_file, build_dir=self.config.build_dir, suppress_pass_output=suppress_output) 
         self.analyzer = analyze.StructAnalyzer(config=self.config)  
         self.selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size, rnn_type=self.config.rnn_type)   
@@ -77,6 +76,8 @@ class Runner:
         parser.add_argument("--grouping-idx", type=int, help="selected grouping index")
         parser.add_argument("--print-pass-output", action="store_true", help="un-suppress analysis and transform pass output")
         parser.add_argument("--max-N", type=int, default=3, help="The (maximum) number of groups each struct will be divided into")
+        
+        parser.add_argument("--sanity-check-N", type=int, default=5, help="The amount of times sanity check will be ran on the benchmark")
         parser.add_argument("--profile-avg-cnt", type=int, help="Number of iterations to run when profiling runtime and cache misses", default=10)  
         parser.add_argument("--train-epochs", type=int, help="Number epochs to train the model on the training data", default=1000)
         parser.add_argument("--model-path", type=str, help="Path to the saved model pth file", default="model.pth")
@@ -147,6 +148,7 @@ class Runner:
     def run_analysis_pass(self):
         print(f"Run analysis pass on source file {self.config.source_file}")
         self.analyzer.run_analysis_pass()
+        self.analyzer.llvm_helper.emit_ll_ir() 
         print("Analysis matrices stored in field_loop_analysis.json")
 
     def run_all_groupings(self):
@@ -197,12 +199,12 @@ class Runner:
         train_df, test_df = train_test_split(ds_df, test_size=0.2) 
         selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size)  
         print(f"Dataset size: {len(ds_df)} Training Size: {len(train_df)} Testing Size: {len(test_df)}") 
-        selector_model.train(ds_df=ds_df, epochs=epochs) 
-        selector_model.test(ds_df=ds_df)  
-        selector_model.evaluate(ds_df=ds_df, output_dir=self.config.experiment_dir) 
-        # selector_model.train(ds_df=train_df, epochs=epochs) 
-        # selector_model.test(ds_df=test_df)  
-        # selector_model.evaluate(ds_df=test_df, output_dir=self.config.experiment_dir) 
+        # selector_model.train(ds_df=ds_df, epochs=epochs) 
+        # selector_model.test(ds_df=ds_df)  
+        # selector_model.evaluate(ds_df=ds_df, output_dir=self.config.experiment_dir) 
+        selector_model.train(ds_df=train_df, epochs=epochs) 
+        selector_model.test(ds_df=test_df)  
+        selector_model.evaluate(ds_df=test_df, output_dir=self.config.experiment_dir) 
         # selector_model.save_model( self.config.experiment_dir.joinpath(self.config.model_path)) 
         selector_model.save_model( self.config.experiment_dir.joinpath(f"model.pth"))  
 
@@ -466,7 +468,9 @@ class Runner:
     def _evaluate_model(self, ds_df:pd.DataFrame, model_path:Path=Path(models.DEFAULT_MODEL_PATH)): 
         selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size)  
         selector_model.load_model(model_path) 
-        selector_model.evaluate(ds_df) 
+        train_df, test_df = train_test_split(ds_df, test_size=0.2, train_size=0.8) 
+        # selector_model.evaluate(ds_df)
+        selector_model.evaluate(test_df)  
     
     def evaluate_model(self): 
         print(f"Evaluating model on all benchmarks") 

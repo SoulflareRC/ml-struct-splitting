@@ -448,26 +448,28 @@ class Analyzer {
                              if(gepInst->getSourceElementType()->isStructTy()){
                                 // this is a potential struct access 
                                 StructType *st = cast<StructType>(gepInst->getSourceElementType()); 
-                                errs() << "Potential struct access to struct name: "<<st->getStructName()<<"in loop "<<i<<"\n";
-                                gepInst->print(errs()); 
-                                errs() << "\n"; 
-                                Value *memberIdxOperand = gepInst->getOperand(gepInst->getNumOperands()-1); // last operand is 
-                                ConstantInt *memberIdxInt = dyn_cast<ConstantInt>(memberIdxOperand); 
-                                if(memberIdxInt) {
-                                    int memberIdx = memberIdxInt->getSExtValue(); 
-                                    errs() << "Accessing member idx: "<< memberIdx <<"\n"; 
-                                    errs() << "Users: "<<"\n"; 
-                                    StructMemberAccessKey memberAccessKey = { st, memberIdx, loop, i };
-                                    struct_access_table[memberAccessKey].key = memberAccessKey; 
-                                    for(llvm::User* user:gepInst->users()) {
-                                        errs() << user << "\n"; 
-                                        user->print(errs()); 
-                                        errs() << "\ncount: "<<bbCntTable[bb]<<"\n"; 
-                                        errs() << "\n"; 
-                                        int userExecCnt = bbCntTable[bb]; 
-                                        if(Instruction* userInst = dyn_cast<Instruction>(user)) {
-                                            struct_access_table[memberAccessKey].usages.insert(userInst); 
-                                            struct_access_table[memberAccessKey].usage_cnts[userInst] = userExecCnt; 
+                                if(st && st->getStructName().str().find("struct")!=string::npos){
+                                    errs() << "Potential struct access to struct name: "<<st->getStructName()<<"in loop "<<i<<"\n";
+                                    gepInst->print(errs()); 
+                                    errs() << "\n"; 
+                                    Value *memberIdxOperand = gepInst->getOperand(gepInst->getNumOperands()-1); // last operand is 
+                                    ConstantInt *memberIdxInt = dyn_cast<ConstantInt>(memberIdxOperand); 
+                                    if(memberIdxInt) {
+                                        int memberIdx = memberIdxInt->getSExtValue(); 
+                                        errs() << "Accessing member idx: "<< memberIdx <<"\n"; 
+                                        errs() << "Users: "<<"\n"; 
+                                        StructMemberAccessKey memberAccessKey = { st, memberIdx, loop, i };
+                                        struct_access_table[memberAccessKey].key = memberAccessKey; 
+                                        for(llvm::User* user:gepInst->users()) {
+                                            errs() << user << "\n"; 
+                                            user->print(errs()); 
+                                            errs() << "\ncount: "<<bbCntTable[bb]<<"\n"; 
+                                            errs() << "\n"; 
+                                            int userExecCnt = bbCntTable[bb]; 
+                                            if(Instruction* userInst = dyn_cast<Instruction>(user)) {
+                                                struct_access_table[memberAccessKey].usages.insert(userInst); 
+                                                struct_access_table[memberAccessKey].usage_cnts[userInst] = userExecCnt; 
+                                            }
                                         }
                                     }
                                 }

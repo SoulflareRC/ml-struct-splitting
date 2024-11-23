@@ -11,6 +11,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.metrics import roc_curve, auc
 from sklearn.preprocessing import LabelBinarizer
 from sklearn.preprocessing import label_binarize
+from sklearn.model_selection import train_test_split 
 import groupers 
 import json 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -321,7 +322,7 @@ class GroupingSelector:
 
     def evaluate(self, ds_df: pd.DataFrame, output_dir:Path=Path(".")):
         # Get predictions and targets
-        preds, targets, probs = self.test(ds_df)
+        preds, targets, probs = self.test(ds_df) 
         print(f"preds: {preds} \n targets: {targets} \n probs: {probs}")
 
         # Calculate metrics

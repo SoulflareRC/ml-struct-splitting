@@ -1,6 +1,4 @@
-from enum import Enum, auto
 import numpy as np
-import random
 from sklearn.cluster import KMeans, AgglomerativeClustering, SpectralClustering 
 from sklearn.mixture import GaussianMixture 
 MAX_N = 3 
