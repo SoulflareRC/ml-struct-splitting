@@ -20,7 +20,8 @@ TRANSFORM_RESULT_FNAME="transform_result.json"
 ANALYSIS_RESULT_FNAME="analysis_result.json" 
 STRUCT_CSV_FNAME = "_grouping_result.csv"
 STRUCT_DATASET_CSV_FNAME = "_dataset_grouping_result.csv"
-
+SCORE_ADJUSTMENT_K = 0.9 
+SCORE_ADJUSTMENT_B = -0.001 
 # TIME_EXECUTABLE_CNT=10
 # DEFAULT_TIME_EXECUTABLE_CNT=10 
 # MAX_N = 3 
@@ -42,7 +43,7 @@ class StructAnalyzer:
         suppress_pass_output = not config.print_pass_output 
         self.profile_avg_cnt = config.profile_avg_cnt 
         
-        self.llvm_helper = LLVMHelper(source_file=source_file, build_dir=build_dir) 
+        self.llvm_helper = LLVMHelper(config=config) 
         self.grouper_arr = groupers.get_all_groupers(max_N=max_N)
         self.columns = columns 
         source_file = Path(source_file).absolute() 
@@ -66,7 +67,7 @@ class StructAnalyzer:
             self.load_analysis_file(ANALYSIS_FNAME) 
             for key in self.analysis_dict.keys(): 
                 matrix = self.analysis_dict[key] 
-                selected_grouping_idx = 1  
+                selected_grouping_idx = 1
                 selected_grouping = self.generate_grouping(matrix, selected_grouping_idx)  
                 logging.debug(f"Struct name: {key} grouping: {selected_grouping}") 
                 grouping_dict[key] = selected_grouping.tolist()  
@@ -249,7 +250,7 @@ class StructAnalyzer:
         feature_grouping_matrices = np.zeros((group_cnt, feature_matrix.shape[0], feature_matrix.shape[1]+1))
         
         # run each grouping method 
-        for gidx in range(group_cnt): 
+        for gidx in tqdm(range(group_cnt)): 
             print(f"Running grouping method {gidx}") 
             grouping = self.generate_grouping(feature_matrix, gidx)
             grouping_dict = {
@@ -260,6 +261,10 @@ class StructAnalyzer:
             # avg_time_delta = self.run_transform() 
             score, avg_time_delta, avg_d1_miss_delta, avg_lld_miss_delta = self.run_transform() 
             # avg_time_delta = round(avg_time_delta, 3) # round to 3 digits after, more will just be deviations 
+            score = np.round(score, 3) 
+            if gidx != 0: 
+                score *= SCORE_ADJUSTMENT_K 
+                score -= SCORE_ADJUSTMENT_B 
             data = {
                 'struct_name': struct_name, 
                 'feature_matrix': feature_matrix, 
@@ -280,12 +285,14 @@ class StructAnalyzer:
             logging.debug(f"grouping vector: \n", grouping) 
             logging.debug(f"feature grouping matrix: \n", feature_grouping_matrix) 
             
-            # time_deltas[gidx] = avg_time_delta 
-            scores[1:] -= 0.001 # other grouping methods must prove that they are at least 0.1% better than no splitting. 
             scores[gidx] = score
             feature_grouping_matrices[gidx] = feature_grouping_matrix 
                  
         # target = np.argmax(time_deltas) 
+        
+        # scores = np.round(scores, 3) 
+        # scores[1:] *= SCORE_ADJUSTMENT_K # other grouping methods must prove that they are at least 0.1% better than no splitting. 
+        # scores[1:] -= SCORE_ADJUSTMENT_B 
         target = np.argmax(scores) 
         logging.debug(f"scores: \n", scores);
         logging.debug(f"feature_grouping_matrices.shape: \n", feature_grouping_matrices.shape)
@@ -302,7 +309,7 @@ class StructAnalyzer:
     def search_all_structs(self): 
         df = pd.DataFrame(columns=self.columns) 
         ds_df = pd.DataFrame(columns=dataset_columns) 
-        for key in self.analysis_dict.keys(): 
+        for key in tqdm(list(self.analysis_dict.keys())): 
             struct_df, struct_result = self.search_struct(key) 
             df = pd.concat([df, struct_df]) 
             ds_df = ds_df._append(struct_result, ignore_index=True)
@@ -320,7 +327,7 @@ class StructAnalyzer:
         this method will transform the code using the loaded selector model 
         '''
         # load model first 
-        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT) 
+        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT,L=self.config.loop_cnt,  hidden_size=self.config.hidden_size) 
         selector_model.load_model(model_path)  
         grouping_dict = {} 
         grouping_ids_dict = {} 
@@ -346,7 +353,8 @@ class StructAnalyzer:
             grouping_ids_dict[struct_name] = selected_idx
        
         logging.debug("Final grouping ids: \n", json.dumps(grouping_ids_dict, indent=4)) 
-        print("Final grouping dict: \n", json.dumps(grouping_dict, indent=4))
+        print("Final grouping dict(fields): \n", json.dumps(grouping_dict, indent=4))
+        print("Final grouping dict(structs): \n", json.dumps(grouping_ids_dict, indent=4))
         print(f"Saving grouping dict to {GROUPING_FNAME}")
         with open(GROUPING_FNAME, "w") as f:
             json.dump(grouping_dict, f, indent=4) 

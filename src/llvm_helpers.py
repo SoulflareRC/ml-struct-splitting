@@ -110,7 +110,11 @@ def run_command(command, capture_output=False):
         raise  # This will re-raise the exception to stop the program
     
 class LLVMHelper: 
-    def __init__(self, source_file:Path, build_dir:Path):   
+    # def __init__(self, source_file:Path, build_dir:Path): 
+    def __init__(self, config): 
+        self.config = config    
+        source_file = config.source_file 
+        build_dir = config.build_dir 
         source_file = Path(source_file).absolute() 
         current_dir = Path.cwd().absolute()   
         self.source_file = source_file
@@ -175,7 +179,7 @@ class LLVMHelper:
         # Redirect output to /dev/null (Unix) or nul (Windows) if suppress_output is True
         output_redirection = " > /dev/null 2>&1" if suppress_output else " > analysis.out"
         
-        run_command(f"opt -load-pass-plugin='{self.build_dir+PATH2LIB}' -passes='{ANALYSIS_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
+        run_command(f"opt -load-pass-plugin='{self.build_dir+PATH2LIB}' -struct-opt=fffff -loop-cnt={self.config.loop_cnt} -feature-mode={self.config.feature_mode} -passes='{ANALYSIS_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
 
     def run_transform_pass(self, suppress_output=False): 
         # Run transform pass
@@ -185,7 +189,7 @@ class LLVMHelper:
         # Redirect output to /dev/null (Unix) or nul (Windows) if suppress_output is True
         output_redirection = " > /dev/null 2>&1" if suppress_output else " > opt.out"
         
-        run_command(f"opt -load-pass-plugin='{self.build_dir+PATH2LIB}' -passes='{TRANSFORM_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
+        run_command(f"opt -load-pass-plugin='{self.build_dir+PATH2LIB}' -loop-cnt={self.config.loop_cnt} -feature-mode={self.config.feature_mode} -passes='{TRANSFORM_PASS}' {self.base_name}.profdata.bc -o {self.base_name}.opt.bc {output_redirection}")
         
         run_command(f"llvm-dis {self.base_dir}/*.bc")
 

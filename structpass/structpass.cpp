@@ -31,6 +31,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/Pass.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Support/CommandLine.h"
 // #include "llvm/Analysis/BlockFrequencyAnalysis.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -40,27 +41,39 @@
 #include "Analyzer.hpp" 
 /* *******Implementation Ends Here******* */
 #define HOTTEST_LOOP_CNT 10 // only the 10 hottest loops are considered 
-
 using namespace llvm;
 using namespace std;   
+static llvm::cl::opt<std::string> StructOption(
+  "struct-opt", 
+  llvm::cl::desc("Test"), 
+  llvm::cl::value_desc("test"), 
+  llvm::cl::init("wtf") 
+); 
+
+static llvm::cl::opt<int> StructOption_LoopCnt( 
+  "loop-cnt", 
+  llvm::cl::desc("L hottest loops"), 
+  llvm::cl::value_desc("test"), 
+  llvm::cl::init(10)  
+); 
+
+
+static llvm::cl::opt<std::string> StructOption_FeatureMode( 
+  "feature-mode", 
+  llvm::cl::desc("Feature Mode"), 
+  llvm::cl::value_desc("test"), 
+  llvm::cl::init("LOOP")   
+); 
+static int getFeatureMode(){
+  if(StructOption_FeatureMode=="LOOP") return MODE_LOOP; 
+  return MODE_BB; 
+}; 
 namespace {
   struct StructAnalysisPass : public PassInfoMixin<StructAnalysisPass> {
-    /*
-      struct declaration looks like this: 
-      %struct.Person = type { [50 x i8], i32 }
-
-      instantiation looks like this: 
-      %2 = alloca %struct.Person, align 4
-    
-      https://llvm.org/docs/GetElementPtr.html#what-is-the-first-index-of-the-gep-instruction 
-      
-      first index is just 0 if we are not doing a struct array 
-    */
-    
-
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM){ 
       errs() << "-----------------------------------------------------ANALYSIS PASS------------------------------------------------------------\n";
-      Analyzer analyzer(M, MAM);  
+      errs() << StructOption << "\n"; 
+      Analyzer analyzer(M, MAM, StructOption_LoopCnt, getFeatureMode());   
 
       return PreservedAnalyses::none(); 
     }
@@ -71,7 +84,7 @@ struct StructSplittingPass : public PassInfoMixin<StructSplittingPass> {
 
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
       errs() << "-----------------------------------------------------TRANSFORM PASS------------------------------------------------------------\n";
-      Analyzer analyzer(M, MAM);  
+      Analyzer analyzer(M, MAM, StructOption_LoopCnt, getFeatureMode());   
       StructGroupingTable groupingTable =  analyzer.loadStructGroupingTable(GROUPING_FNAME); 
       analyzer.printStructGroupingTable(groupingTable); 
       analyzer.transform(); 

@@ -63,89 +63,118 @@ class HotnessGrouper(Grouper):
         3. aggregate columns based with identical bit vectors (sum columns with the same bit vectors)  
         4. sort columns by their averages 
         """
+        
+        n_datapoint = data.shape[0] 
+        n_clusters = min(n_datapoint, self.max_N) 
+        if n_datapoint == 1:  # Special case for single data point
+            return np.array([0])  # Assign it to group 0 (or any group)
+        
+        # print("data: \n", data)  
         # print("groupings shape: ", groupin) 
         # groups = np.zeros(data.shape[1], dtype=int)
         groupings = np.full(data.shape[0], -1)  
         # print("data: \n", data) 
         # Step 1: Calculate bit vectors
         bit_vectors = (data != 0).astype(int)  # 1 if not zero, 0 if zero
-        # print("bit vectors: \n", bit_vectors) 
+        
 
         # Step 2: Rescale the matrix by dividing by the matrix sum
-        total_sum = np.sum(data)
-        if total_sum == 0: 
-            print("data shape: ", data.shape) 
-            return np.zeros(data.shape[0], dtype=int)  
-        
-        if total_sum == 0:
-            scaled_data = np.zeros_like(data)
-        else:
-            scaled_data = data / total_sum
+        row_sum = np.sum(data, axis=1,keepdims=True)
+        row_sum = np.where(row_sum==0, 1e-10, row_sum) 
+        # scaled_data = data / row_sum 
+        scaled_data = data 
         # print("scaled data: \n", scaled_data) 
         
         # Step 3: Aggregate columns with identical bit vectors
         # Identify unique bit vectors
-        unique_bit_vectors, unique_indices = np.unique(bit_vectors, axis=1, return_inverse=True)
+        unique_bit_vectors, unique_indices = np.unique(bit_vectors, axis=0, return_inverse=True)
+        # print("bit vectors: \n", bit_vectors) 
+        # print("unique_bit_vectors: \n", unique_bit_vectors) 
+        # print("unique_indices: \n", unique_indices)
 
         # Initialize an array to hold aggregated columns
-        aggregated_columns = np.zeros((data.shape[0], unique_bit_vectors.shape[1]))
-
+        # aggregated_columns = np.zeros((data.shape[0], unique_bit_vectors.shape[1]))
+        aggregated_columns = [] 
         # Store the associations between columns and bit vectors
         column_bit_vector_associations = []
+        
+        g_cnt = len(unique_bit_vectors) 
+        column_field_access_association = np.zeros((g_cnt, n_datapoint))  # bit vectors indicating which fields where accessed in each aggregated group,   
 
-        # Aggregate columns by summing the ones that have the same bit vector
-        for i in range(unique_bit_vectors.shape[1]):
+        # Aggregate columns by summing the fields that have the same bit vector (accessed in the same loops) 
+        for i in range(len(unique_bit_vectors)):
+            
+            target_bit_vector = unique_bit_vectors[i] 
+            # print("target_bit_vector: ", target_bit_vector) 
             # Find all columns that have the same bit vector as the current unique one
             matching_columns = np.where(unique_indices == i)[0]
-            
+            # print("matching columns: ", matching_columns) 
+            matched_columns = scaled_data[matching_columns]
+            # print("matched columns: \n", matched_columns) 
             # Sum those columns and assign the result to the aggregated array
-            aggregated_columns[:, i] = np.sum(scaled_data[:, matching_columns], axis=1)
+            aggregated_column = np.sum(matched_columns, axis=0)
+            # print("aggregated column: \n",aggregated_column) 
+            # aggregated_columns[:, i] = aggregated_column 
+            aggregated_columns.append(aggregated_column) 
             
-            # Store the bit vector associated with these columns
-            column_bit_vector_associations.append(unique_bit_vectors[:, i])
+            column_field_access_association[i][matching_columns] = 1; 
+            # print("column_field_access_association:\n", column_field_access_association) 
 
         # Convert the list of associations to an array
-        column_bit_vector_associations = np.array(column_bit_vector_associations)
-        aggregated_columns = aggregated_columns.T 
-        aggregated_columns = np.where(aggregated_columns==0, 1e-10, aggregated_columns) # avoid div by 0 
+        # column_bit_vector_associations = np.array(column_bit_vector_associations)
+        aggregated_columns = np.array(aggregated_columns) 
+        # print("column_bit_vector_associations: \n",column_bit_vector_associations)
+        # print("aggregated_columns: \n", aggregated_columns)
+        # aggregated_columns = np.where(aggregated_columns==0, 1e-10, aggregated_columns) # avoid div by 0 
         
-        aggregated_columns_hotness = np.sum(aggregated_columns,axis=1) / np.sum(column_bit_vector_associations,axis=1)
-        aggregated_columns_hotness = aggregated_columns_hotness / np.sum(aggregated_columns_hotness) # normalize 
-
-        # print("aggregated columns: \n", aggregated_columns)
-        # print("column_bit_vector_associations: \n", column_bit_vector_associations)
+        aggregated_columns_hotness = np.sum(aggregated_columns, axis=1) / np.sum(aggregated_columns) 
+        if np.sum(aggregated_columns) == 0: 
+            aggregated_columns_hotness = np.sum(aggregated_columns, axis=1) 
         # print("aggregated_columns_hotness\n", aggregated_columns_hotness)
         
         # Step 5: Re-arrange the columns by hotness (descending order)
         sorted_indices = np.argsort(aggregated_columns_hotness)[::-1]  # Sort indices in descending order of hotness
+        
+        # print("sorted indices: ", sorted_indices )
 
         # Re-arrange the columns and bit vector associations based on sorted indices
         sorted_aggregated_columns = aggregated_columns[sorted_indices]
-        sorted_column_bit_vector_associations = column_bit_vector_associations[sorted_indices]
-
+        sorted_field_access_association = column_field_access_association[sorted_indices] 
+        
         # print("sorted aggregated columns: \n", sorted_aggregated_columns)
-        # print("sorted column_bit_vector_associations: \n", sorted_column_bit_vector_associations)
-        
-        for i in range(len(sorted_column_bit_vector_associations)):
-            ''' 
-            now sorted column_bit_vector_associations is a K x F matrix 
-            we go from 0 to K-1 
-            if the current row has 1 on a row[j], and groupings[j] == -1, then assign groupings[j]=i 
-            '''
-            # Get the bit vector for the current group i
-            current_bit_vector = sorted_column_bit_vector_associations[i]
-            # print(current_bit_vector) 
-            # print(groupings)
-            # Find columns (indices) where groupings is -1 (unassigned) and current bit vector is 1
-            unassigned_columns = (groupings == -1)  # Boolean mask for unassigned columns
-            matching_columns = (current_bit_vector == 1)  # Boolean mask for current bit vector 1's
-            ids = np.where( (unassigned_columns & matching_columns) != 0 )
-            # print(f"fields {ids} goes to group {i}") 
-            # Assign group i to the columns where both conditions are true
-            groupings[ids] = i
-        
-        return groupings.reshape(1, -1)  # reshape to n x 1
+        # print("sorted field access association: \n", sorted_field_access_association) 
 
+        # print("max hotness: ", np.max(aggregated_columns_hotness) )
+        level = np.max(aggregated_columns_hotness) / n_clusters  
+        # print("level: ", level) 
+        thresholds = np.arange(1,n_clusters+1) * level 
+        # print("thresholds: ", thresholds) 
+        
+        # further aggregate rows under each level
+        final_aggregated_field_vector = np.zeros((n_clusters, n_datapoint), dtype=int)  
+        for i in range(g_cnt):  
+            hotness = aggregated_columns_hotness[i] 
+            # print("hotness: ", hotness) 
+            index = np.searchsorted(thresholds, hotness, side='right') 
+            if index>= n_clusters:  
+                index = n_clusters-1 
+            # print("index: ", index) 
+            field_access_vector = sorted_field_access_association[i] 
+            # print("field access vector: ", field_access_vector) 
+            # print("final_aggregated_field_vector[index]: ", final_aggregated_field_vector[index])
+            final_aggregated_field_vector[index] = np.bitwise_or(final_aggregated_field_vector[index], field_access_vector.astype(int))  
+        # print("final_aggregated_field_vector: \n", final_aggregated_field_vector)
+        
+        for i in range(n_clusters): 
+            field_vector = final_aggregated_field_vector[i] 
+            fields = np.where(field_vector==1) 
+            groupings[fields] = i 
+            
+        groupings = np.where(groupings==-1, n_clusters-1, groupings) 
+        
+        groupings =  groupings.reshape(1, -1)  # reshape to n x 1
+        # print(f"Final groupings: {groupings}")
+        return groupings
 class KMeansGrouper(Grouper):
     # This grouper assigns all fields in the struct to group 0 (no splitting) 
     def assign_groups(self, data: np.ndarray) -> np.ndarray:

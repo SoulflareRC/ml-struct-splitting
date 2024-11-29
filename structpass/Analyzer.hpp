@@ -40,9 +40,10 @@
 #include "json.hpp" 
 
 
-#define HOTTEST_LOOP_CNT 10 // only the 10 hottest loops are considered 
+// #define HOTTEST_LOOP_CNT 10 // only the 10 hottest loops are considered 
 #define ANALYSIS_FNAME "field_loop_analysis.json"
 #define GROUPING_FNAME "groupings.json"
+
 
 
 // #ifndef HEADER_ANALYZER_H 
@@ -66,26 +67,39 @@ class Analyzer {
         unordered_map<string, StructDef>    structTable;
         vector<Loop*>                       hottestLoops; 
         unordered_map<Loop*, int>           loopCntTable; 
-        unordered_map<BasicBlock*, int>           bbCntTable; 
+        unordered_map<BasicBlock*, int>           bbCntTable;
+        std::vector<BasicBlock*> hottestBBs; 
         StructAccessTable structAccessTable; 
+        StructBBAccessTable structBBAccessTable; 
+        
         StructAccessVectorTable structAccessVectorTable; 
         StructGroupingTable structGroupingTable; 
-
+        int L, mode; 
+        unordered_map<StructType*, vector<BasicBlock*>> structHottestBBTable; 
         // Transformer transformer; 
 
         // Constructor that uses an initialization list
-        Analyzer(Module &M, ModuleAnalysisManager &MAM)
-            : M(M), MAM(MAM), context(M.getContext()), Builder(IRBuilder<>(context)) {   // Initialize references in the initialization list
+        Analyzer(Module &M, ModuleAnalysisManager &MAM, int L, int mode) 
+            : M(M), MAM(MAM), context(M.getContext()), Builder(IRBuilder<>(context)), L(L), mode(mode)  {   // Initialize references in the initialization list
             // this->context = M.getContext(); 
             this->structTable = getAllStructs(); 
             printStructTable(this->structTable); 
-            this->loopCntTable = getLoopCntTable(); 
-            this->hottestLoops = getHottestLoops(); 
-            this->structAccessTable = getStructAccessTable(); 
-            printStructAccessTable(this->structAccessTable);
-            this->structAccessVectorTable = convertStructAccessTableToVectors(this->structAccessTable); 
-            printStructAccessVectorTable(this->structAccessVectorTable);  
-            saveSerializedVectorTable(this->structAccessVectorTable, ANALYSIS_FNAME); 
+            this->loopCntTable = getLoopCntTable();
+
+            if(mode==MODE_LOOP){ 
+                this->hottestLoops = getHottestLoops(); 
+                this->structAccessTable = getStructAccessTable(); 
+                printStructAccessTable(this->structAccessTable);
+                this->structAccessVectorTable = convertStructAccessTableToVectors(this->structAccessTable); 
+                printStructAccessVectorTable(this->structAccessVectorTable);  
+                saveSerializedVectorTable(this->structAccessVectorTable, ANALYSIS_FNAME); 
+            }else{
+                this->hottestBBs = getHottestBBs(); 
+                getStructHottestBBTable(); 
+                this->structBBAccessTable = getStructBBAccessTable(); 
+                this->structAccessVectorTable = convertStructBBAccessTableToVectors(this->structBBAccessTable); 
+                saveSerializedVectorTable(this->structAccessVectorTable, ANALYSIS_FNAME);  
+            } 
         } 
         void transform(){
             unordered_set<StructDef*> needTransformation; 
@@ -211,12 +225,13 @@ class Analyzer {
             // initialize the table for each struct 
             for(auto &item:structTable){
                 string structName = item.first; 
-                errs() << "Intializing struct "<<structName<<" with matrix of "<<HOTTEST_LOOP_CNT<<" x "<<item.second.st->getNumElements()<<"\n"; 
-                res[structName] = vector<vector<int>>(HOTTEST_LOOP_CNT, vector<int>(item.second.st->getNumElements(),0)); 
+                errs() << "Intializing struct "<<structName<<" with matrix of "<<this->L<<" x "<<item.second.st->getNumElements()<<"\n"; 
+                res[structName] = vector<vector<int>>(this->L, vector<int>(item.second.st->getNumElements(),0)); 
                 // init cnt to 0 
             }
             // errs() << "bro???"; 
             for(auto &item:table){
+                auto key = item.first; 
                 string structName = item.second.key.st->getStructName().str();
                 // errs() << "st: "<<item.second.key.st << " name: "<<structName << "\n";  
                 int loopIdx = item.second.key.loopIdx; 
@@ -229,8 +244,61 @@ class Analyzer {
             // errs() << "huh???"; 
             return res; 
         }
+        StructAccessVectorTable convertStructBBAccessTableToVectors(StructBBAccessTable table){
+            StructAccessVectorTable res;
+            errs() <<" number of structs: "<<this->structTable.size() << "\n"; 
+            // initialize the table for each struct 
+            for(auto &item:structTable){
+                string structName = item.first; 
+                errs() << "Intializing struct "<<structName<<" with matrix of "<<this->L<<" x "<<item.second.st->getNumElements()<<"\n"; 
+                res[structName] = vector<vector<int>>(this->L, vector<int>(item.second.st->getNumElements(),0)); 
+                // init cnt to 0 
+            }
+            // errs() << "bro???"; 
+            for(auto &item:table){
+                auto key = item.first; 
+                string structName = item.second.key.st->getStructName().str();
+                // errs() << "st: "<<item.second.key.st << " name: "<<structName << "\n";  
+                int bbIdx = item.second.key.bbIdx; 
+                int memberIdx = item.second.key.memberIdx; 
+                int accessCnt = item.second.getTotalAccessCnt(); 
+                // errs() << "access cnt: "<<accessCnt<<"\n"; 
+                // errs() <<" usage cnt: "<<item.second.usage_cnts.size()<< "\n"; 
+                res[structName][bbIdx][memberIdx] = accessCnt; 
+            }
+            // errs() << "huh???"; 
+            return res; 
+        }
 
     private: 
+        void  getStructHottestBBTable(){
+            for(auto& item:this->structTable){
+                string name = item.first; 
+                StructDef sdef = item.second; 
+                // Step 1: Copy entries to a vector
+                std::vector<std::pair<BasicBlock*, int>> bbVector; 
+                for(BasicBlock* bb:sdef.gepAccessBBs){
+                    bbVector.push_back({bb, bbCntTable[bb]}); 
+                }
+
+                // Step 2: Sort by values in descending order
+                std::sort(bbVector.begin(), bbVector.end(),
+                        [](const std::pair<BasicBlock*, int> &a, const std::pair<BasicBlock*, int> &b) {
+                            return a.second > b.second; // Compare by value
+                        });
+
+                // Step 3: Extract the top N BasicBlocks
+                std::vector<BasicBlock*> hottestBBs(this->L, nullptr); 
+                for (int i = 0; i < std::min(this->L, (int)bbVector.size()); ++i) {
+                    BasicBlock* bb = bbVector[i].first;  
+                    errs() << "\nHottest BB "<< i<< "(" << bbVector[i].second << "): \n"; 
+                    bb->print(errs()); 
+                    hottestBBs[i]=bb;
+                }
+                sdef.hottestGepAccessBBs = hottestBBs; 
+                this->structTable[name] = sdef; 
+            }
+        }
         // this gets the table of struct_name:structDef 
         unordered_map<string, StructDef> getAllStructs(){
             errs()<<"All structs: \n"; 
@@ -297,7 +365,9 @@ class Analyzer {
                             structType->print(errs()); 
                             errs() << "\nInst: "; 
                             I.print(errs()); 
-                            errs() << "\n\n"; 
+                            errs() << "\n\n";
+                            BasicBlock* bb = I.getParent(); 
+                            if(bb) struct_table[structName].gepAccessBBs.insert(bb); 
                             struct_table[structName].gepUsages.insert(dyn_cast<GetElementPtrInst>(&I)); 
                             continue; 
                         }
@@ -368,6 +438,27 @@ class Analyzer {
             } 
             return nullptr; 
         }
+        vector<BasicBlock*> getHottestBBs(){
+            // Step 1: Copy entries to a vector
+            std::vector<std::pair<BasicBlock*, int>> bbVector(bbCntTable.begin(), bbCntTable.end());
+
+            // Step 2: Sort by values in descending order
+            std::sort(bbVector.begin(), bbVector.end(),
+                    [](const std::pair<BasicBlock*, int> &a, const std::pair<BasicBlock*, int> &b) {
+                        return a.second > b.second; // Compare by value
+                    });
+
+            // Step 3: Extract the top N BasicBlocks
+            std::vector<BasicBlock*> hottestBBs(this->L, nullptr); 
+            for (int i = 0; i < std::min(this->L, (int)bbVector.size()); ++i) {
+                BasicBlock* bb = bbVector[i].first;  
+                errs() << "\nHottest BB "<< i<< "(" << bbVector[i].second << "): \n"; 
+                bb->print(errs()); 
+                hottestBBs[i]=bb;
+            }
+
+            return hottestBBs;
+        }
         vector<Loop*> getHottestLoops() {
             std::unordered_map<Loop*, int> loop_cnt_table = getLoopCntTable();
             // std::unordered_map<Loop*, int> res;
@@ -388,7 +479,7 @@ class Analyzer {
                 // Optionally insert into result map if needed
                 // res.insert(l);  // Copy pair (Loop*, count) into the result map
                 res.push_back(l.first); 
-                if(res.size() >= HOTTEST_LOOP_CNT) break; 
+                if(res.size() >= this->L) break; 
             }
 
             return res;
@@ -436,6 +527,53 @@ class Analyzer {
             }
 
             return loop_cnt_table; 
+        }
+        StructBBAccessTable getStructBBAccessTable(){
+            StructBBAccessTable struct_bb_access_table; 
+            for(auto &item:this->structTable){
+                StructDef sdef = item.second; 
+                vector<llvm::BasicBlock*> hottestBBs = sdef.hottestGepAccessBBs; 
+                for(int i = 0;i<hottestBBs.size();i++){
+                    BasicBlock* bb = hottestBBs[i]; 
+                    if(bb){
+                        for(Instruction& inst:(*bb)){
+                            // find accesses of the members 
+                            if(GetElementPtrInst* gepInst = dyn_cast<GetElementPtrInst>(&inst)){
+                                    if(gepInst->getSourceElementType()->isStructTy()){
+                                    // this is a potential struct access 
+                                    StructType *st = cast<StructType>(gepInst->getSourceElementType()); 
+                                    if(st && st->getStructName().str().find("struct")!=string::npos){
+                                        errs() << "Potential struct access to struct name: "<<st->getStructName()<<"in loop "<<i<<"\n";
+                                        gepInst->print(errs()); 
+                                        errs() << "\n"; 
+                                        Value *memberIdxOperand = gepInst->getOperand(gepInst->getNumOperands()-1); // last operand is 
+                                        ConstantInt *memberIdxInt = dyn_cast<ConstantInt>(memberIdxOperand); 
+                                        if(memberIdxInt) {
+                                            int memberIdx = memberIdxInt->getSExtValue(); 
+                                            errs() << "Accessing member idx: "<< memberIdx <<"\n"; 
+                                            errs() << "Users: "<<"\n"; 
+                                            StructMemberBBAccessKey memberAccessKey = { st, memberIdx, bb, i };
+                                            struct_bb_access_table[memberAccessKey].key = memberAccessKey; 
+                                            for(llvm::User* user:gepInst->users()) {
+                                                errs() << user << "\n"; 
+                                                user->print(errs()); 
+                                                errs() << "\ncount: "<<bbCntTable[bb]<<"\n"; 
+                                                errs() << "\n"; 
+                                                int userExecCnt = bbCntTable[bb]; 
+                                                if(Instruction* userInst = dyn_cast<Instruction>(user)) {
+                                                    struct_bb_access_table[memberAccessKey].usages.insert(userInst); 
+                                                    struct_bb_access_table[memberAccessKey].usage_cnts[userInst] = userExecCnt; 
+                                                }
+                                            }
+                                        }
+                                    }
+                                    }
+                            }
+                        }
+                    }
+                }
+            }
+            return struct_bb_access_table; 
         }
         StructAccessTable getStructAccessTable(){
             StructAccessTable struct_access_table; 

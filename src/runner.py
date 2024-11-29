@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import logging 
 from config import Config 
 from datetime import datetime
+import matplotlib.cm as cm
 import time 
 from sklearn.model_selection import train_test_split 
 from collections import Counter 
@@ -32,21 +33,25 @@ dataset_columns = ["feature_grouping_matrices", "target"]
 # pd.set_option('display.max_colwidth', None)  # No limit on column width
 
 class Runner:
-    def __init__(self):
+    def __init__(self, config_override:dict={}): 
         # Parse arguments and load configuration
         print("Init") 
         self.args = self._parse_args()
         print("Args parsed") 
         self.config = self._initialize_config(self.args)
         print("Config initialized") 
-        setattr(self.config, "experiment_dir", self.get_experiment_dir()) 
+        if config_override != {}: 
+            self.config.update_from_dict(config_override) 
+            print(f"Config overriden with values: \n{json.dumps(config_override, indent=4)}") 
+         
+        
+        
         self._print_config()  
         self.config.save_to_file(self.config.experiment_dir.joinpath(f"config.json"))
         print("Config saved")  
         # self.analyzer = analyze.StructAnalyzer(source_file=self.config.source_file, build_dir=self.config.build_dir, suppress_pass_output=suppress_output) 
         self.analyzer = analyze.StructAnalyzer(config=self.config)  
-        self.selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size, rnn_type=self.config.rnn_type)   
-        
+        self.selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, L=self.config.loop_cnt, hidden_size=self.config.hidden_size, rnn_type=self.config.rnn_type)   
 
     def _parse_args(self):
         """ Parse command-line arguments using argparse """
@@ -66,10 +71,14 @@ class Runner:
         parser.add_argument("--sanity-check-all", action="store_true", help="Check if code still works after transformation for all source files under folder") 
         parser.add_argument("--evaluate-model", action="store_true", help="Evaluate model on all benchmarks")
         parser.add_argument("--analyze-transform-result", action="store_true", help="Takes a given transform result csv file and analyzes it and generates charts") 
+        parser.add_argument("--analyze-dataset", action="store_true", help="Analyze the ds_df CSV file to visualize the dataset") 
+        
         
         # config parameters 
+        parser.add_argument("--config-path", type=str, default=None, help="If specified, will load config from this json file, all other parameters EXCEPT experiment name will be overwritten")  
         parser.add_argument("--experiment-name", type=str, default=None, help="If specified, will use the this as the name of the experiment.") 
         parser.add_argument("--analysis-df-path", type=str, default=None, help="The path to the CSV file containing the result of struct analysis. If this is specified then the training/prediction process will skip the analysis and just read from this file.")
+        parser.add_argument("--analysis-ds-df-path", type=str, default=None, help="The path to the ds_df CSV file") 
         parser.add_argument("--rnn-type", type=str, default="GRU", help="The type of RNN used by the model") 
         parser.add_argument("--hidden-size", type=int, default=64, help="The hidden size of the model") 
         parser.add_argument("--transform-result-path", type=str, help="The transform result csv file", default="test_"+TRANSFORM_RESULT_CSV_FNAME)
@@ -80,10 +89,13 @@ class Runner:
         parser.add_argument("--sanity-check-N", type=int, default=5, help="The amount of times sanity check will be ran on the benchmark")
         parser.add_argument("--profile-avg-cnt", type=int, help="Number of iterations to run when profiling runtime and cache misses", default=10)  
         parser.add_argument("--train-epochs", type=int, help="Number epochs to train the model on the training data", default=1000)
-        parser.add_argument("--model-path", type=str, help="Path to the saved model pth file", default="model.pth")
+        parser.add_argument("--model-path", type=str, help="Path to the saved model pth file", default=None)
         parser.add_argument("--source-file", type=str, help="The C source file without extension", default="programs/test_programs/test.c")
         parser.add_argument("--benchmark-dir", type=str, help="Directory for benchmark folder", default="programs/test_programs")
         parser.add_argument("--build-dir", type=str, help="The build directory used to build the pass plugin", default="build")
+        
+        parser.add_argument("--loop-cnt", type=int, help="L hottest loops", default=10) 
+        parser.add_argument("--feature-mode", type=str, help="LOOP or BB", default="LOOP") 
         
         # Parse the command-line arguments
         args = parser.parse_args()
@@ -94,6 +106,26 @@ class Runner:
         """ Initialize configuration using the parsed arguments """
         print(args) 
         config = Config(**args) 
+        self.config = config 
+        setattr(config, "experiment_dir", self.get_experiment_dir()) 
+        setattr(config, "transform_result_path", config.experiment_dir.joinpath(f"test_{TRANSFORM_RESULT_CSV_FNAME}")) 
+        setattr(config, "model_path", config.experiment_dir.joinpath(f"model.pth")) 
+        setattr(config, "analysis_ds_df_path", config.experiment_dir.joinpath(f"{Path(config.benchmark_dir).name}_df.csv"))
+        setattr(config, "analysis_df_path", config.experiment_dir.joinpath(f"{Path(config.benchmark_dir).name}_ds_df.csv"))
+        print(f"config model path: {config.model_path}") 
+        if config.config_path != None: 
+            override_keys = [
+                "rnn_type", "hidden_size", 
+                "transform_result_path", "model_path", "analysis_ds_df_path", "analysis_df_path",
+                "benchmark_dir", "build_dir", 
+                "max_N", "profile_avg_cnt", "train_epochs", "loop_cnt", "feature_mode"  
+            ]
+            with open(config.config_path, "r") as f: 
+                config_dict = json.load(f) 
+            config.update_from_dict(config_dict, override_keys=override_keys)   
+            print(f"Overriden config with {config.config_path}")
+            
+        self.config = config 
         return config
     
     def _print_config(self):
@@ -129,7 +161,9 @@ class Runner:
                     f"rnn_type-{self.config.rnn_type}_"
                     f"max_N-{self.config.max_N}_"
                     f"profile_avg_cnt-{self.config.profile_avg_cnt}_"
-                    f"train_epochs-{self.config.train_epochs}"
+                    f"train_epochs-{self.config.train_epochs}_"
+                    f"loop_cnt-{self.config.loop_cnt}_" 
+                    f"feature_mode-{self.config.feature_mode}" 
                 )
         
         # Create the full path
@@ -197,7 +231,7 @@ class Runner:
 
     def train_selector(self, ds_df:pd.DataFrame, epochs=100):  
         train_df, test_df = train_test_split(ds_df, test_size=0.2) 
-        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size)  
+        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, L=self.config.loop_cnt, hidden_size=self.config.hidden_size)  
         print(f"Dataset size: {len(ds_df)} Training Size: {len(train_df)} Testing Size: {len(test_df)}") 
         # selector_model.train(ds_df=ds_df, epochs=epochs) 
         # selector_model.test(ds_df=ds_df)  
@@ -206,7 +240,7 @@ class Runner:
         selector_model.test(ds_df=test_df)  
         selector_model.evaluate(ds_df=test_df, output_dir=self.config.experiment_dir) 
         # selector_model.save_model( self.config.experiment_dir.joinpath(self.config.model_path)) 
-        selector_model.save_model( self.config.experiment_dir.joinpath(f"model.pth"))  
+        selector_model.save_model(self.config.model_path)  
 
     def get_all_benchmark_ds_df(self): 
         if self.config.analysis_df_path is not None: 
@@ -216,7 +250,9 @@ class Runner:
                 lambda x : np.array(json.loads(str(x))) 
             )
         else: 
-            _, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
+            df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
+            df.to_csv(self.config.analysis_ds_df_path) 
+            self.analyze_dataset(df) 
         print("Column Types:")
         print(ds_df.dtypes)
         
@@ -224,7 +260,7 @@ class Runner:
         processed_ds_df["feature_grouping_matrices"] = processed_ds_df["feature_grouping_matrices"].apply(
             lambda x: json.dumps(x.tolist()) 
         ) 
-        processed_ds_df.to_csv( self.config.experiment_dir.joinpath(f"{Path(self.config.benchmark_dir).name}_ds_df.csv"), index=False) 
+        processed_ds_df.to_csv( self.config.analysis_df_path, index=False) 
         print(processed_ds_df.head()) 
         
         return ds_df 
@@ -375,6 +411,270 @@ class Runner:
         df["grouping_ids_dict"] = df["grouping_ids_dict"].apply(lambda x: json.loads(x)) 
         self.analyze_and_generate_bar_charts(df, output_dir=self.config.experiment_dir)      
 
+    def _analyze_dataset(self, df:pd.DataFrame): 
+        self._visualize_struct_grouping(df) 
+        self._visualize_struct_best_grouping(df) 
+        self._visualize_grouping_percentage(df) 
+        self._visualize_struct_posneg_percentage(df) 
+        self._visualize_grouping_idx_percentage(df) 
+        
+    def _visualize_grouping_idx_percentage(self, df):
+        """
+        Visualize the percentage of positive vs. negative scores for each grouping_idx
+        as horizontal bar charts using an orange and blue color scheme.
+
+        :param df: A Pandas DataFrame with columns:
+                'struct_name', 'grouping_idx', 'score'
+        """
+        # Calculate positive and negative percentages by grouping_idx
+        grouping_data = df.groupby('grouping_idx').apply(
+            lambda x: {
+                'positive': (x['score'] > 0).mean() * 100,  # Percentage positive
+                'negative': (x['score'] <= 0).mean() * 100  # Percentage negative
+            }
+        ).reset_index()
+
+        # Convert to a proper DataFrame for plotting
+        grouping_data = pd.DataFrame(grouping_data.to_dict('records'))
+        grouping_data.columns = ['grouping_idx', 'percentages']
+        grouping_data['positive'] = grouping_data['percentages'].apply(lambda x: x['positive'])
+        grouping_data['negative'] = grouping_data['percentages'].apply(lambda x: x['negative'])
+
+        # Plot horizontal bar chart
+        fig, ax = plt.subplots(figsize=(10, 6))
+        y_positions = np.arange(len(grouping_data))  # One bar per grouping_idx
+        bar_height = 0.4  # Height of bars
+
+        # Positive and negative bars
+        ax.barh(y_positions, grouping_data['positive'], bar_height, label='Positive %', color='blue')
+        ax.barh(y_positions, -grouping_data['negative'], bar_height, label='Negative %', color='orange')
+
+        # Label and style the chart
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels([f"Grouping Idx {idx}" for idx in grouping_data['grouping_idx']])
+        ax.set_xlabel('Percentage (%)')
+        ax.set_ylabel('Grouping Index')
+        ax.set_title('Percentage of Positive vs. Negative Scores by Grouping Index')
+        ax.axvline(0, color='black', linewidth=0.8, linestyle='--')  # Divider for positive/negative
+        ax.legend(loc='best')
+        plt.tight_layout()
+
+        # Save the figure
+        plt.savefig(self.config.experiment_dir.joinpath("dataset_grouping_posneg.png"))
+    
+    
+    def _visualize_struct_posneg_percentage(self, df):
+        """
+        Visualize the percentage of grouping_idx results (positive vs. negative scores) for each struct
+        as horizontal bar charts with updated color scheme.
+
+        :param df: A Pandas DataFrame with columns:
+                'struct_name', 'grouping_idx', 'score'
+        """
+        # Prepare data for positive and negative percentages
+        struct_grouped = df.groupby('struct_name').apply(
+            lambda x: {
+                'positive': (x['score'] > 0).mean() * 100,  # Percentage positive
+                'negative': (x['score'] <= 0).mean() * 100  # Percentage negative
+            }
+        ).reset_index()
+
+        # Split into separate columns
+        struct_grouped = pd.DataFrame(struct_grouped.to_dict('records'))
+        struct_grouped.columns = ['struct_name', 'percentages']
+        struct_grouped['positive'] = struct_grouped['percentages'].apply(lambda x: x['positive'])
+        struct_grouped['negative'] = struct_grouped['percentages'].apply(lambda x: x['negative'])
+
+        # Plot horizontal bar chart
+        fig, ax = plt.subplots(figsize=(10, 6))
+        y_positions = np.arange(len(struct_grouped))  # One bar per struct name
+        bar_height = 0.4  # Height of bars
+
+        # Positive and negative bars with updated colors
+        ax.barh(y_positions, struct_grouped['positive'], bar_height, label='Positive %', color='blue')
+        ax.barh(y_positions, -struct_grouped['negative'], bar_height, label='Negative %', color='orange')
+
+        # Label and style the chart
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels(struct_grouped['struct_name'])
+        ax.set_xlabel('Percentage (%)')
+        ax.set_ylabel('Struct Name')
+        ax.set_title('Percentage of Positive vs. Negative Scores by Struct Name')
+        ax.axvline(0, color='black', linewidth=0.8, linestyle='--')  # Divider for positive/negative
+        ax.legend(loc='best')
+        plt.tight_layout()
+
+        # Save the figure
+        plt.savefig(self.config.experiment_dir.joinpath("dataset_struct_posneg.png"))
+    
+    def _visualize_struct_grouping(self, df:pd.DataFrame):  
+            """
+            Visualize scores for each struct as horizontal bar charts.
+            Each struct displays multiple bars for different grouping_idx and their scores.
+            
+            :param df: A Pandas DataFrame with columns: 
+                    'struct_name', 'grouping_idx', 'score'
+            """
+            # Sort the dataframe by struct_name and grouping_idx for consistent plotting
+            df = df.sort_values(by=['struct_name', 'grouping_idx'])
+
+            # Get unique structs and indices
+            structs = df['struct_name'].unique()
+            grouping_indices = df['grouping_idx'].unique()
+
+            # Initialize a figure
+            fig, ax = plt.subplots(figsize=(10, 6))
+
+            # Set up y-axis positions
+            y_positions = np.arange(len(structs))  # Positions for each struct
+            bar_height = 0.15  # Height of each bar
+            offsets = np.arange(-(len(grouping_indices) // 2), len(grouping_indices) // 2 + 1) * bar_height
+
+            # Plot the bars
+            for i, g_idx in enumerate(grouping_indices):
+                # Extract rows for the current grouping index
+                current_group = df[df['grouping_idx'] == g_idx]
+
+                # Align bars for the corresponding struct
+                scores = []
+                for struct in structs:
+                    # Extract the score for the struct and grouping index
+                    score = current_group[current_group['struct_name'] == struct]['score']
+                    scores.append(score.iloc[0] if not score.empty else 0)
+                
+                # Plot bars with offsets
+                ax.barh(y_positions + offsets[i], scores, bar_height, label=f'Group {g_idx}')
+
+            # Label and style the chart
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels(structs)
+            ax.set_xlabel('Score')
+            ax.set_ylabel('Struct Name')
+            ax.set_title('Scores by Struct and Grouping Index')
+            ax.legend(title='Grouping Index')
+            plt.tight_layout()
+
+            # Save the figure
+            plt.savefig(self.config.experiment_dir.joinpath("dataset_struct_grouping.png"))
+            # print("Figure saved to test.png")
+
+
+    def _visualize_grouping_percentage(self, df: pd.DataFrame):
+        """
+        Generate a pie chart showing the percentage contribution of each grouping_idx
+        in being the best score for the structs, with the grouper names displayed.
+        Groups are displayed in ascending order of their indices.
+        
+        :param df: A Pandas DataFrame with columns: 
+                    'struct_name', 'grouping_idx', 'score'
+        """
+        # Find the row with the highest score for each struct
+        max_scores = df.loc[df.groupby('struct_name')['score'].idxmax()]
+
+        # Count the occurrences of each grouping_idx
+        grouping_counts = max_scores['grouping_idx'].value_counts()
+
+        # Retrieve all grouper names
+        grouper_names = groupers.get_all_grouper_names()
+
+        # Sort by grouping index for consistent order
+        grouping_counts = grouping_counts.sort_index()
+
+        # Extract data for plotting
+        grouping_indices = grouping_counts.index
+        sizes = grouping_counts.values
+
+        # Combine grouping index with their respective names
+        labels = [
+            f'Group {g_idx}: {grouper_names[g_idx]}' if g_idx < len(grouper_names) else f'Group {g_idx}'
+            for g_idx in grouping_indices
+        ]
+
+        # Use the tab20 colormap for consistent coloring
+        cmap = cm.get_cmap('tab20', len(labels))
+        colors = [cmap(i) for i in range(len(labels))]
+
+        # Plot the pie chart
+        fig, ax = plt.subplots(figsize=(8, 8))
+        wedges, texts, autotexts = ax.pie(
+            sizes,
+            labels=labels,
+            autopct=lambda p: f'{p:.1f}%' if p > 5 else '',  # Hide small percentages
+            startangle=90,
+            colors=colors,
+            textprops={'fontsize': 10},
+        )
+
+        # Add a title and style the chart
+        ax.set_title('Percentage of Best Scores by Grouping Index', fontsize=14)
+
+        # Save the figure
+        plt.tight_layout()
+        plt.savefig(self.config.experiment_dir.joinpath("dataset_grouping_percentage_pie.png"))
+
+
+    
+    def _visualize_struct_best_grouping(self, df: pd.DataFrame):
+        """
+        Visualize scores for each struct as horizontal bar charts.
+        Each struct displays only the grouping_idx with the highest score,
+        with different colors representing each grouping_idx.
+        
+        :param df: A Pandas DataFrame with columns: 
+                    'struct_name', 'grouping_idx', 'score'
+        """
+        # Find the row with the highest score for each struct
+        max_scores = df.loc[df.groupby('struct_name')['score'].idxmax()]
+
+        # Sort by struct_name for consistent plotting
+        max_scores = max_scores.sort_values(by='struct_name')
+
+        # Extract data for plotting
+        structs = max_scores['struct_name'].values
+        scores = max_scores['score'].values
+        grouping_indices = max_scores['grouping_idx'].values
+
+        # Use the tab20 colormap to assign colors based on grouping indices
+        unique_groups = np.unique(grouping_indices)
+        cmap = cm.get_cmap('tab20', len(unique_groups))
+        colors = {g_idx: cmap(i) for i, g_idx in enumerate(unique_groups)}
+        bar_colors = [colors[g_idx] for g_idx in grouping_indices]
+
+        # Initialize the plot
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        # Set up y-axis positions for the structs
+        y_positions = np.arange(len(structs))
+
+        # Create horizontal bars with colors based on grouping indices
+        ax.barh(y_positions, scores, color=bar_colors)
+
+        # Label and style the chart
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels(structs)
+        ax.set_xlabel('Score')
+        ax.set_title('Highest Scores by Struct (Grouped by Index)')
+
+        # Add a legend for grouping indices
+        legend_labels = [f'Group {g_idx}' for g_idx in unique_groups]
+        legend_handles = [plt.Rectangle((0, 0), 1, 1, color=colors[g_idx]) for g_idx in unique_groups]
+        ax.legend(legend_handles, legend_labels, title='Grouping Index', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        # Adjust layout to prevent clipping
+        plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave space for the legend
+
+        # Save the figure
+        plt.savefig(self.config.experiment_dir.joinpath("dataset_struct_grouping.png"))
+
+    
+    
+    def analyze_dataset(self, ds_df=None):  
+        print("Visualizing dataset") 
+        if ds_df is None: 
+            ds_df = pd.read_csv(self.config.analysis_ds_df_path) 
+        print(ds_df.head()) 
+        self._analyze_dataset(ds_df)  
+
     def predict_and_transform_all(self, directory=".", build_dir=Path("build"), model_path=models.DEFAULT_MODEL_PATH): 
         folder = Path(directory) 
         print(f"Transforming all benchmarks under folder {folder}")
@@ -417,30 +717,35 @@ class Runner:
         positive_rate = positive_cnt / total_cnt 
         print("final transform result: \n", json.dumps(transform_result_dict, indent=4)) 
         print(f"Total cnt: {total_cnt} Positive cnt: {positive_cnt} Positive rate: {positive_rate}")
-        with open( self.config.experiment_dir.joinpath(TRANSFORM_RESULT_FNAME), "w") as f: 
+        with open(self.config.experiment_dir.joinpath(TRANSFORM_RESULT_FNAME), "w") as f: 
             json.dump(transform_result_dict, f, indent=4) 
 
         processed_result_df = transform_result_df.copy() 
         processed_result_df["grouping_ids_dict"] = processed_result_df["grouping_ids_dict"].apply(lambda x: json.dumps(x)) 
-        processed_result_df.to_csv(self.config.experiment_dir.joinpath(f"test_{TRANSFORM_RESULT_CSV_FNAME}"), index=False) 
+        processed_result_df.to_csv(self.config.transform_result_path, index=False) 
         self.analyze_and_generate_bar_charts(transform_result_df, output_dir=self.config.experiment_dir)
 
+    def get_model_path(self): 
+        if self.config.model_path is None: 
+            return self.get_experiment_dir().joinpath("model.pth") 
+        return self.config.model_path
+    
     def transform_all(self):
-        self.predict_and_transform_all(directory=self.config.benchmark_dir, build_dir=self.config.build_dir, model_path=self.config.model_path)
+        self.predict_and_transform_all(directory=self.config.benchmark_dir, build_dir=self.config.build_dir, model_path=self.get_model_path())
 
     def analyze_and_transform_all(self):
         print("Analyze and transform all")
         # df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
         ds_df = self.get_all_benchmark_ds_df() 
         self.train_selector(ds_df=ds_df, epochs=self.config.train_epochs)
-        self.predict_and_transform_all(directory=self.config.benchmark_dir, build_dir=self.config.build_dir, model_path=self.config.model_path)
+        self.predict_and_transform_all(directory=self.config.benchmark_dir, build_dir=self.config.build_dir, model_path=self.get_model_path())
 
     def predict_transform(self):
         source_file = Path(self.config.source_file)
         print(f"Predict transform for source file: {source_file}")
         self.analyzer.run_setup()
         self.analyzer.load_analysis_file()
-        self.analyzer.make_prediction(self.config.model_path)
+        self.analyzer.make_prediction(self.get_model_path())
 
     def sanity_check(self):
         source_file = Path(self.config.source_file)
@@ -466,7 +771,7 @@ class Runner:
         self._sanity_check_all(self.config.benchmark_dir, self.config.build_dir)
     
     def _evaluate_model(self, ds_df:pd.DataFrame, model_path:Path=Path(models.DEFAULT_MODEL_PATH)): 
-        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT, hidden_size=self.config.hidden_size)  
+        selector_model = models.GroupingSelector(C=groupers.GROUPERS_CNT,L=self.config.loop_cnt,  hidden_size=self.config.hidden_size)  
         selector_model.load_model(model_path) 
         train_df, test_df = train_test_split(ds_df, test_size=0.2, train_size=0.8) 
         # selector_model.evaluate(ds_df)
@@ -476,7 +781,7 @@ class Runner:
         print(f"Evaluating model on all benchmarks") 
         # df, ds_df = self.analyze_all_benchmarks(directory=self.config.benchmark_dir, build_dir=self.config.build_dir)
         ds_df = self.get_all_benchmark_ds_df() 
-        self._evaluate_model(ds_df, self.config.model_path) 
+        self._evaluate_model(ds_df, self.get_model_path()) 
 
     def run(self):
         start = time.time() 
@@ -515,5 +820,9 @@ class Runner:
 
         if self.config.analyze_transform_result: 
             self.analyze_transform_result() 
+            
+        if self.config.analyze_dataset: 
+            self.analyze_dataset() 
+            
         duration = time.time() - start 
         print(f"Run took {duration} seconds!") 

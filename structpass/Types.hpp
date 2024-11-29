@@ -42,6 +42,8 @@ using namespace llvm;
 using namespace std;
 using namespace nlohmann;    
 #pragma once 
+#define MODE_LOOP 1
+#define MODE_BB 2
 struct StructMemberAccessKey{
     StructType* st; 
     int memberIdx; 
@@ -59,6 +61,27 @@ struct StructMemberAccessKey{
         O<<"\n"; 
     } 
 }; 
+struct StructMemberBBAccessKey {
+    StructType* st; 
+    int memberIdx; 
+    BasicBlock* bb; 
+    int bbIdx; 
+
+    // Overload equality operator for hashing
+    bool operator==(const StructMemberBBAccessKey& other) const {
+        return st == other.st && memberIdx == other.memberIdx &&
+               bb == other.bb && bbIdx == other.bbIdx;
+    }
+
+    // Print method for debugging
+    void print(raw_ostream &O) {
+        if (st) O << "Struct Name:\t" << st->getStructName() << "\t";
+        O << "Member Idx:\t" << memberIdx << "\t";
+        O << "BasicBlock Pointer:\t" << bb << "\t"; // Printing bb as a pointer
+        O << "BasicBlock Idx:\t" << bbIdx << "\n";
+    }
+};
+
 struct StructMemberAccessRecord{
     StructMemberAccessKey key; 
     unordered_set<llvm::Instruction*> usages; 
@@ -88,6 +111,47 @@ struct StructMemberAccessRecord{
     }
 }; 
 
+
+struct StructMemberBBAccessRecord{
+    StructMemberBBAccessKey key; 
+    unordered_set<llvm::Instruction*> usages; 
+    unordered_map<llvm::Instruction*, int> usage_cnts;
+    // for hashing 
+    bool operator==(const StructMemberBBAccessRecord& other) const {
+        return (key==other.key) && (usages==other.usages) && (usage_cnts == other.usage_cnts); 
+    }
+    int getTotalAccessCnt(){
+        int sum = 0; 
+        for(auto &item:usage_cnts){
+            sum += item.second; 
+        }
+        return sum; 
+    }
+    void print(raw_ostream &O){
+        O << "\tKey:\t";
+        key.print(O); 
+        O << "\n"; 
+
+        for (auto &usage : usage_cnts) {
+            errs() << "\tUsage:\t"; 
+            usage.first->print(errs()); 
+            errs() << "\tTotal Access Count:\t" << usage.second << "\n"; 
+        }
+        errs() << "\nTotal Count: "<<getTotalAccessCnt()<<"\n"; 
+    }
+}; 
+
+// Custom hash function for StructMemberBBAccessKey
+struct StructMemberBBAccessKeyHasher {
+    std::size_t operator()(const StructMemberBBAccessKey& key) const {
+        std::size_t h1 = std::hash<StructType*>()(key.st);
+        std::size_t h2 = std::hash<int>()(key.memberIdx);
+        std::size_t h3 = std::hash<BasicBlock*>()(key.bb);
+        std::size_t h4 = std::hash<int>()(key.bbIdx);
+        return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3); // Combine the hash values
+    }
+};
+
 // Custom hash function for StructMemberAccessKey
 struct StructMemberAccessKeyHasher {
     std::size_t operator()(const StructMemberAccessKey& key) const {
@@ -109,7 +173,17 @@ struct StructMemberAccessRecordHasher {
         return keyHash ^ (usagesHash << 1) ^ (usageCntsHash << 2);
     }
 };
-
+// Custom hash function for StructMemberAccessRecord
+struct StructMemberBBAccessRecordHasher {
+    std::size_t operator()(const StructMemberBBAccessRecord& record) const {
+        StructMemberBBAccessKeyHasher keyHasher;
+        std::size_t keyHash = keyHasher(record.key);
+        std::size_t usagesHash = std::hash<std::size_t>()(record.usages.size());  // Example, could be more complex
+        std::size_t usageCntsHash = std::hash<std::size_t>()(record.usage_cnts.size());
+        return keyHash ^ (usagesHash << 1) ^ (usageCntsHash << 2);
+    }
+};
+typedef std::unordered_map<StructMemberBBAccessKey, StructMemberBBAccessRecord, StructMemberBBAccessKeyHasher> StructBBAccessTable;
 typedef unordered_map<StructMemberAccessKey, StructMemberAccessRecord, StructMemberAccessKeyHasher> StructAccessTable; 
 typedef unordered_map<string, vector<vector<int>>> StructAccessVectorTable; 
 // Matrix[i][j]=loop i, member idx j  
@@ -217,6 +291,8 @@ struct StructDef{
     unordered_set<llvm::GetElementPtrInst*> gepUsages;  
     unordered_set<llvm::StructType*> isMember;  // struct types that has this struct as a member 
     unordered_set<llvm::StructType*> hasMember; // 
+    unordered_set<llvm::BasicBlock*> gepAccessBBs; 
+    vector<llvm::BasicBlock*> hottestGepAccessBBs; 
     void print(raw_ostream &O){
         O<<"----------------Struct Def Information-------------------------\n"; 
         O<<"Struct name: "<<name<<" \n"; 
