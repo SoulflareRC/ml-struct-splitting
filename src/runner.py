@@ -43,8 +43,12 @@ class Runner:
         if config_override != {}: 
             self.config.update_from_dict(config_override) 
             print(f"Config overriden with values: \n{json.dumps(config_override, indent=4)}") 
-         
-        
+            # config = self.config 
+            setattr(self.config, "experiment_dir", self.get_experiment_dir()) 
+            setattr(self.config, "transform_result_path", self.config.experiment_dir.joinpath(f"test_{TRANSFORM_RESULT_CSV_FNAME}")) 
+            setattr(self.config, "model_path", self.config.experiment_dir.joinpath(f"model.pth")) 
+            setattr(self.config, "analysis_ds_df_path", self.config.experiment_dir.joinpath(f"{Path(self.config.benchmark_dir).name}_df.csv"))
+            setattr(self.config, "analysis_df_path", self.config.experiment_dir.joinpath(f"{Path(self.config.benchmark_dir).name}_ds_df.csv"))
         
         self._print_config()  
         self.config.save_to_file(self.config.experiment_dir.joinpath(f"config.json"))
@@ -243,7 +247,7 @@ class Runner:
         selector_model.save_model(self.config.model_path)  
 
     def get_all_benchmark_ds_df(self): 
-        if self.config.analysis_df_path is not None: 
+        if self.config.analysis_df_path is not None and Path(self.config.analysis_df_path).exists(): 
             print(f"Reading all benchmark analysis from {self.config.analysis_df_path}") 
             ds_df = pd.read_csv(self.config.analysis_df_path, dtype={"feature_grouping_matrices":str, "target": int}) 
             ds_df['feature_grouping_matrices'] = ds_df['feature_grouping_matrices'].apply(
@@ -664,7 +668,7 @@ class Runner:
         plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave space for the legend
 
         # Save the figure
-        plt.savefig(self.config.experiment_dir.joinpath("dataset_struct_grouping.png"))
+        plt.savefig(self.config.experiment_dir.joinpath("dataset_struct_best_grouping.png"))
 
     
     

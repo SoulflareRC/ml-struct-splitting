@@ -40,9 +40,44 @@ if __name__=="__main__":
         #     "hidden_size": 8,  
         #     "analyze_and_transform_all": True, 
         # }, 
+        # {
+        #     "experiment_name":"base-maxN-5", 
+        #     "max_N": 5,  
+        #     "analyze_and_transform_all": True, 
+        # },
+        
+         
         {
-            "experiment_name":"base-maxN-5", 
-            "max_N": 5,  
+            "experiment_name":"base-L2", 
+            "loop_cnt": 2,  
+            "analyze_and_transform_all": True, 
+        }, 
+        
+        {
+            "experiment_name":"base-L8", 
+            "loop_cnt": 8,  
+            "analyze_and_transform_all": True, 
+        }, 
+        
+        {
+            "experiment_name":"base-maxN-2", 
+            "max_N": 2,  
+            "analyze_and_transform_all": True, 
+        }, 
+        
+        {
+            "experiment_name":"base-maxN-8", 
+            "max_N": 8,  
+            "analyze_and_transform_all": True, 
+        }, 
+        {
+            "experiment_name":"base-H16", 
+            "hidden_size": 16,  
+            "analyze_and_transform_all": True, 
+        }, 
+        {
+            "experiment_name":"base-H32", 
+            "hidden_size": 32,  
             "analyze_and_transform_all": True, 
         }, 
     ]

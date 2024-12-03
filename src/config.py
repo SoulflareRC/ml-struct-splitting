@@ -45,5 +45,7 @@ class Config:
         - update_dict (dict): A dictionary containing key-value pairs to update.
         """
         for key, value in update_dict.items():
-            if key in override_keys: 
+            if key in override_keys or len(override_keys)==0: 
+                print(f"Overriding: {key}:{value}")
                 setattr(self, key, value)
+        print(self.__dict__)
