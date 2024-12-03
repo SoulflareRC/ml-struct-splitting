@@ -15,7 +15,7 @@ This project features:
 ## Usage
 The main Python scripts used in this project are under the `src` folder. The LLVM passes were written under the `structpass` folder. The benchmarks used in this project are under the `programs` folder. 
 
-Although the system is driven by `src/analyze.py`,  a `Makefile` is included to make usage of this project easier. 
+Although the system is driven by `src/main.py`,  a `Makefile` is included to make simple usages of this project easier. 
 - `make build`: Build the LLVM pass plugin
 - `make clean`: Clean the `build` directory (for rebuilding the LLVM pass plugins)
 - `make setup_venv`: Set up the Python virtual environment and install dependencies
@@ -27,6 +27,7 @@ Although the system is driven by `src/analyze.py`,  a `Makefile` is included to 
 - `make run_grouping grouping_idx=<grouping_idx> source_file=<source_file>`: This runs the specified grouping method on the specified source file, and outputs score, time delta, d1 miss rate, lld miss rate, and the grouping vectors. 
 - `make run_all_groupings source_file=<source_file>`: This runs all grouping methods on each struct defined in the source file and outputs the scores of each grouping method.
 
+For more advanced usages, please run `python3 src/main.py --help`. 
 
 ## Score 
 The "best" grouping method is determined by a score obtained by running the transformed executable using each grouping method. The score consists of 3 parts: 
@@ -44,3 +45,10 @@ A total of 7 grouping methods were implemented in `src/groupers.py`:
 5. `AgglomerativeGrouper`: This groups fields with KMeans clustering using their feature vector from field loop access matrix.
 6. `SpectralGrouper`: This groups fields with Spectral clustering using their feature vector from field loop access matrix.
 7. `GMMGrouper`: This groups fields with GMM clustering using their feature vector from field loop access matrix.
+
+## Experiments 
+This project has several experiments that are already finished in advance. To use the existing results (datasets, models, configurations, etc) of the experiments, you can simple set the `--config-path` argument. For example: 
+```
+python3 src/main.py --source-file=programs/test_programs/test7.c --experiment-name=tmp --config-path=experiments/base/config.json --predict-transform 
+# this command will run inference using the baseline model on benchmark test7.c and output result(if any) into the experiments/tmp/ folder.  
+```
